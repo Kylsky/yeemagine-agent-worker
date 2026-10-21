@@ -107,7 +107,27 @@ test('an image too large for WeChat becomes a notice and the rest of the result 
   const {c, sent} = fixture(); c.patch({ run:{ id:'run', sent:0 } });
   c.platform.api = async (_token, path) => { if (path.includes('/resources/')) throw new Fault('BODY_TOO_LARGE', 413); return { status:'completed', finalText:'画好了', artifacts:[{ resourceId:'r1' }] }; };
   await c.deliverSafely(c.read().epoch);
-  assert.deepEqual(sent, ['画好了', '有一张图片无法通过微信发送，请到平台查看。']); assert.equal(c.read().run, null);
+  assert.deepEqual(sent, ['画好了', '有一张图片无法通过微信发送（BODY_TOO_LARGE），请到平台查看。']); assert.equal(c.read().run, null);
+  assert.equal(c.read().diagnostics.deliveryError, 'BODY_TOO_LARGE');
+});
+test('giving up on a result tells the user which step failed and keeps the reason for diagnostics', async () => {
+  const {c, sent} = fixture(); c.patch({ run:{ id:'run', sent:1, failures:4 } });
+  c.platform.api = async () => ({ status:'completed', finalText:'画好了', artifacts:[{ resourceId:'r1' }] });
+  c.wx.upload = async () => { throw new Fault('NETWORK_TIMEOUT', 502); };
+  await c.deliverSafely(c.read().epoch);
+  assert.deepEqual(sent, ['这次的结果暂时发不出去（NETWORK_TIMEOUT），请到平台查看。']);
+  assert.equal(c.read().run, null); assert.equal(c.read().diagnostics.deliveryError, 'NETWORK_TIMEOUT');
+});
+test('WeChat CDN rejections are final, server errors are retried, and API errors carry the WeChat code', async () => {
+  const bot = { baseurl:'https://ilinkai.weixin.qq.com', bot_token:'token' }, route = { toUserId:'owner', contextToken:'ctx' };
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(32)]);
+  const weixin = cdnStatus => new Weixin(async url => String(url).includes('getuploadurl')
+    ? Response.json({ ret:0, upload_param:'param' }) : new Response('', { status:cdnStatus }));
+  await assert.rejects(weixin(403).upload(bot, route, png), { code:'MEDIA_UPLOAD_REJECTED_403', status:400 });
+  await assert.rejects(weixin(503).upload(bot, route, png), { code:'MEDIA_UPLOAD_HTTP_503', status:502 });
+  await assert.rejects(weixin(200).upload(bot, route, png), { code:'MEDIA_UPLOAD_NO_PARAM' });
+  const failing = new Weixin(async () => Response.json({ ret:-2, errmsg:'bad' }));
+  await assert.rejects(failing.send(bot, route, { type:1, text_item:{ text:'x' } }, 'id'), { code:'WEIXIN_API_ERROR_-2' });
 });
 test('a temporary delivery failure is retried later without losing the task', async () => {
   const {c, sent} = fixture(); c.patch({ run:{ id:'run', sent:0 } }); let fail = true;

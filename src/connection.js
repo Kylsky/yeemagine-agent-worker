@@ -4,7 +4,7 @@ import { config, origin, json, jsonBody, Fault, safeCode } from './http.js';
 import { Platform } from './platform.js';
 import { Weixin, API, weixinUrl } from './weixin.js';
 import { empty } from './state.js';
-import { HELP, parse, chunks, confirmationText, inputText, answersFor, balanceText, failureText, GAVE_UP, UNDELIVERABLE, IMAGE_TOO_LARGE } from './commands.js';
+import { HELP, parse, chunks, confirmationText, inputText, answersFor, balanceText, failureText, GAVE_UP, undeliverable, imageUnsendable } from './commands.js';
 
 const minute = 60000;
 // 轮询节奏对齐腾讯官方插件：失败后 2 秒重试，连续 3 次失败等 30 秒并重新计数；-14 暂停 1 小时。
@@ -508,15 +508,17 @@ export class Connection {
     catch (e) {
       this.guard(epoch);
       if (stopsRound(e)) throw e;
-      const run = this.read().run;
+      const run = this.read().run, code = safeCode(e);
+      // 每次失败都留下原因，页面“连接诊断”可见，放弃后也不会丢失线索。
+      this.patch({ diagnostics: { ...this.read().diagnostics, deliveryError: code, deliveryErrorAt: Date.now() } }, epoch);
       if (!run) return null;
       const failures = (run.failures || 0) + 1;
       if (!permanent(e) && failures < DELIVERY_ATTEMPTS) {
         this.patch({ run: { ...run, failures, retryAt: Date.now() + Math.min(30000, RETRY_DELAY * 2 ** (failures - 1)) } }, epoch);
-        return safeCode(e);
+        return code;
       }
       this.patch({ run: null }, epoch);
-      await this.sendQuietly(UNDELIVERABLE, epoch, this.hash('undeliverable:' + run.id));
+      await this.sendQuietly(undeliverable(code), epoch, this.hash('undeliverable:' + run.id));
       return null;
     }
   }
@@ -548,7 +550,8 @@ export class Connection {
         } catch (e) {
           // 单张图片过大、格式不支持或已被删除时换成一句说明，其余内容照常送达。
           if (!permanent(e)) throw e;
-          item = { type: 1, text_item: { text: IMAGE_TOO_LARGE } };
+          this.patch({ diagnostics: { ...this.read().diagnostics, deliveryError: safeCode(e), deliveryErrorAt: Date.now() } }, epoch);
+          item = { type: 1, text_item: { text: imageUnsendable(safeCode(e)) } };
         }
       }
       await this.wx.send(bot, route, item, 'ym_' + this.hash(s.run.id + ':' + i)); this.guard(epoch);

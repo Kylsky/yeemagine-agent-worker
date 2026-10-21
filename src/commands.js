@@ -87,8 +87,9 @@ export function balanceText(data) {
   return lines.join('\n');
 }
 export const GAVE_UP = '平台暂时没有响应，这条消息没能处理，请稍后重发。';
-export const UNDELIVERABLE = '这次的结果暂时发不出去，请到平台查看。';
-export const IMAGE_TOO_LARGE = '有一张图片无法通过微信发送，请到平台查看。';
+// 带上原因代码，用户截图就能看出是哪一步失败。
+export const undeliverable = code => `这次的结果暂时发不出去（${code}），请到平台查看。`;
+export const imageUnsendable = code => `有一张图片无法通过微信发送（${code}），请到平台查看。`;
 // 平台或微信拒绝某条消息时，回一句能照着做的话，而不是错误码。
 const FAILURES = {
   AGENT_CREDIT_INSUFFICIENT: '积分不足，请到平台充值后再试。',

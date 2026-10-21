@@ -53,7 +53,8 @@ export class Weixin {
       });
     } catch (e) { if (e instanceof Fault) throw e; throw new Fault('INVALID_JSON', 400); }
     if (data.ret === -14 || data.errcode === -14) throw new Fault('WEIXIN_COOLDOWN');
-    if ((data.ret != null && data.ret !== 0) || (data.errcode != null && data.errcode !== 0)) throw new Fault('WEIXIN_API_ERROR');
+    // 带上微信返回码，排查发送失败时能看出是哪一类错误。
+    if ((data.ret != null && data.ret !== 0) || (data.errcode != null && data.errcode !== 0)) throw new Fault(`WEIXIN_API_ERROR_${Number(data.errcode || data.ret) || 'UNKNOWN'}`);
     return data;
   }
   async qr() {
@@ -109,12 +110,16 @@ export class Weixin {
     const ticket = await this.call(bot, 'getuploadurl', { filekey, media_type: 1, to_user_id: route.toUserId,
       rawsize: data.length, rawfilemd5: createHash('md5').update(data).digest('hex'), filesize: encrypted.length,
       no_need_thumb: true, aeskey: key.toString('hex') });
-    if (!ticket.upload_full_url && !ticket.upload_param) throw new Fault('MEDIA_UPLOAD_FAILED');
+    if (!ticket.upload_full_url && !ticket.upload_param) throw new Fault('MEDIA_UPLOAD_NO_URL');
     const url = ticket.upload_full_url || `${CDN}/upload?encrypted_query_param=${encodeURIComponent(ticket.upload_param)}&filekey=${filekey}`;
-    const res = await request(weixinUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: encrypted }, 20000, this.fetcher);
+    // 官方插件上传不设超时；Worker 在境外，往国内 CDN 传几 MB 常超过 20 秒，这里放宽到 90 秒。
+    const res = await request(weixinUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: encrypted }, 90000, this.fetcher);
     const parameter = res.headers.get('x-encrypted-param');
     await res.body?.cancel();
-    if (res.status !== 200 || !parameter) throw new Fault('MEDIA_UPLOAD_FAILED');
+    // 与官方插件一致：4xx 是被拒绝、重试无用；5xx 和缺少下载参数按临时错误重试。
+    if (res.status >= 400 && res.status < 500) throw new Fault(`MEDIA_UPLOAD_REJECTED_${res.status}`, 400);
+    if (res.status !== 200) throw new Fault(`MEDIA_UPLOAD_HTTP_${res.status}`);
+    if (!parameter) throw new Fault('MEDIA_UPLOAD_NO_PARAM');
     return { type: 2, image_item: { media: { encrypt_query_param: parameter, aes_key: Buffer.from(key.toString('hex')).toString('base64'), encrypt_type: 1 }, mid_size: encrypted.length } };
   }
 }

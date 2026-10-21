@@ -37,7 +37,9 @@ async function refresh() {
   const d = state.diagnostics || {};
   const time = value => value ? new Date(value).toLocaleTimeString() : '尚无';
   $('diagnostics').textContent = [`轮询启动：${time(d.alarmAt)}`, `最近返回：${time(d.pollAt)}（${d.batchSize ?? 0} 条）`, `下次轮询：${time(state.nextPollAt)}`,
-    `最近消息：${time(d.inboundAt)} · ${d.result || '尚无'}（类型 ${d.messageType ?? '—'}，状态 ${d.messageState ?? '—'}）`].join('\n');
+    `最近消息：${time(d.inboundAt)} · ${d.result || '尚无'}（类型 ${d.messageType ?? '—'}，状态 ${d.messageState ?? '—'}）`,
+    `最近结果发送失败：${d.deliveryError ? `${time(d.deliveryErrorAt)} · ${d.deliveryError}` : '无'}`,
+    `最近回复失败：${d.sendError ? `${time(d.sendErrorAt)} · ${d.sendError}` : '无'}`].join('\n');
 
   if (!state.configured) {
     steps(-1); say('还差几项配置。', 'warn');
