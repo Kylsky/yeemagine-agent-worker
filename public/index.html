@@ -2,15 +2,11 @@
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YeeMagine · 微信助手</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
 <body>
-<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Y</span><span class="brand-name">YeeMagine</span><span class="brand-sub">微信助手</span></div><span class="tag">个人部署</span></header>
+<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Y</span><span class="brand-name">YeeMagine</span><span class="brand-sub">微信助手</span></div></header>
 <main>
-  <section class="hero">
-    <h1>把你的 Agent 带进微信</h1>
-    <p>授权平台账户，再用微信扫一扫，就能在微信里对话和生图。模型和积分都来自你的平台账户。</p>
-  </section>
+  <h1 class="title">把你的 Agent 带进微信</h1>
 
-  <section class="card" aria-labelledby="connect-title">
-    <h2 id="connect-title">连接状态</h2>
+  <section class="card" aria-label="连接状态">
     <ol class="steps" aria-label="连接步骤">
       <li id="step-auth" class="step"><span class="step-dot" aria-hidden="true"></span><span>授权平台账户</span></li>
       <li id="step-wx" class="step"><span class="step-dot" aria-hidden="true"></span><span>扫码连接微信</span></li>
@@ -19,22 +15,18 @@
     <p id="message" class="status" role="status" aria-live="polite">正在读取连接状态…</p>
 
     <div id="setup" class="block" hidden>
-      <p>请在 Cloudflare 里打开这个 Worker 的「设置 → 变量和机密」，补上下面几项：</p>
+      <p>在 Cloudflare 的「设置 → 变量和机密」中补上：</p>
       <ul id="missing" class="chips"></ul>
       <p id="address" class="address" hidden></p>
-      <p class="hint">用上面的地址在平台「用户信息 → 授权应用」里创建应用，就能拿到 Client ID、userId 和 Client Secret。平台地址需要能从公网通过 HTTPS 访问。</p>
+      <p class="hint">用这个地址在平台「授权应用」里创建应用。</p>
     </div>
 
     <form id="login" class="block" hidden>
       <button type="submit" class="btn primary wide">使用平台账户授权</button>
-      <p class="hint center">只允许部署时配置的平台账户登录，不需要密码或 API Key。</p>
     </form>
 
     <div id="controls" class="block" hidden>
-      <div class="connect-row">
-        <span id="wx-status" class="badge">微信未连接</span>
-        <button id="qr-button" type="button" class="btn primary">生成微信二维码</button>
-      </div>
+      <button id="qr-button" type="button" class="btn primary wide">生成微信二维码</button>
       <div id="qr-area" class="qr" hidden>
         <div class="qr-frame"><img id="qr" alt="用微信扫描这个二维码" width="224" height="224"></div>
         <p id="scan-status" class="scan-status">请用微信扫一扫</p>
@@ -52,22 +44,18 @@
   </section>
 
   <section class="card" aria-labelledby="usage-title">
-    <h2 id="usage-title">在微信里这样用</h2>
+    <h2 id="usage-title">常用命令</h2>
     <dl class="commands">
-      <div><dt>直接发消息</dt><dd>和 Agent 对话</dd></div>
-      <div><dt><code>/image 描述</code></dt><dd>生成图片，先报价，回复「确认」才执行</dd></div>
-      <div><dt><code>/new</code></dt><dd>开始新对话</dd></div>
-      <div><dt><code>/models</code> <code>/model 1</code></dt><dd>查看、切换模型</dd></div>
+      <div><dt><code>/image 描述</code></dt><dd>生成图片</dd></div>
+      <div><dt><code>/new</code></dt><dd>新对话</dd></div>
+      <div><dt><code>/model</code></dt><dd>查看或切换模型</dd></div>
       <div><dt><code>/balance</code></dt><dd>查看积分</dd></div>
-      <div><dt><code>/cancel</code></dt><dd>取消当前任务</dd></div>
+      <div><dt><code>/cancel</code></dt><dd>取消任务</dd></div>
+      <div><dt><code>/help</code></dt><dd>全部命令</dd></div>
     </dl>
-    <p class="hint">先发图片再发要求，图片会作为参考。每次只处理一个任务，发送 <code>/help</code> 查看全部命令。</p>
   </section>
 
-  <footer>
-    <p>这个 Worker 只为你一个人服务，不保存消息内容和图片，只保存连接所需的凭证。</p>
-    <a href="https://github.com/Kylsky/yeemagine-agent-worker" target="_blank" rel="noopener noreferrer">查看开源项目 ↗</a>
-  </footer>
+  <footer>不保存你的消息和图片 · <a href="https://github.com/Kylsky/yeemagine-agent-worker" target="_blank" rel="noopener noreferrer">开源项目</a></footer>
 </main>
 </body>
 </html>

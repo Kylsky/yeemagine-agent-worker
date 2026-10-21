@@ -1,17 +1,17 @@
 const $ = id => document.getElementById(id);
 let csrf = '', generation = 0, qrUrl;
 const errors = {
-  LOGIN_REQUIRED:'网页登录已过期，请重新授权。', SESSION_EXPIRED:'网页登录已过期，请重新授权，已连接的微信会保留。',
-  OAUTH_DISABLED:'平台暂停了开放授权，连接信息已保留，恢复后会自动继续。', invalid_client:'Client Secret 不正确，请到 Cloudflare 检查 OAUTH_CLIENT_SECRET。',
-  AUTHORIZATION_EXPIRED:'平台授权已失效或被撤销，Worker 已清除本地数据，请重新授权并扫码。', AUTHORIZATION_DENIED:'你在平台上拒绝了授权，需要时可以重新授权。',
-  INVALID_OAUTH_STATE:'授权链接已过期或来自其他页面，请重新点击授权。', IDENTITY_MISMATCH:'授权的平台账户和部署配置的不一致，请换成正确的账户。',
-  RATE_LIMITED:'点得太快了，请稍等几秒再试。', WEIXIN_COOLDOWN:'微信暂时限制了这个连接，一小时后会自动重试。',
-  OPERATION_IN_PROGRESS:'上一个操作还没结束，请稍后再试。', QR_EXPIRED:'二维码已过期，请重新生成。', BODY_TOO_LARGE:'图片超过 8 MB 限制。'
+  LOGIN_REQUIRED:'登录已过期，请重新授权。', SESSION_EXPIRED:'登录已过期，请重新授权（微信连接会保留）。',
+  OAUTH_DISABLED:'平台暂停了授权，恢复后自动继续。', invalid_client:'Client Secret 不正确，请检查 OAUTH_CLIENT_SECRET。',
+  AUTHORIZATION_EXPIRED:'授权已失效，请重新授权并扫码。', AUTHORIZATION_DENIED:'已取消授权。',
+  INVALID_OAUTH_STATE:'授权链接已过期，请重新授权。', IDENTITY_MISMATCH:'账户与部署配置不一致，请换个账户授权。',
+  RATE_LIMITED:'操作太快，请稍后再试。', WEIXIN_COOLDOWN:'微信暂时限制了连接，一小时后自动重试。',
+  OPERATION_IN_PROGRESS:'上一个操作还没结束，请稍后再试。', QR_EXPIRED:'二维码已过期，请重新生成。', BODY_TOO_LARGE:'图片超过 8 MB。'
 };
-const describe = code => errors[code]
-  || (/^PLATFORM_\w*NETWORK/.test(code) ? `连不上平台（${code}），请确认 PLATFORM_BASE_URL 能从公网通过 HTTPS 访问。` : '');
-function say(text, tone = '') { $('message').textContent = text; $('message').className = 'status' + (tone ? ' ' + tone : ''); }
-function showError(e) { say(describe(e.message) || `操作未完成（${e.message}），请稍后重试或检查配置。`, 'error'); }
+const describe = code => errors[code] || (/^PLATFORM_\w*NETWORK/.test(code) ? `连不上平台（${code}），请检查 PLATFORM_BASE_URL。` : '');
+// 步骤条已经说明当前该做什么，状态行只在有额外信息时出现。
+function say(text, tone = '') { $('message').textContent = text; $('message').className = 'status' + (tone ? ' ' + tone : ''); $('message').hidden = !text; }
+function showError(e) { say(describe(e.message) || `操作未完成（${e.message}），请稍后重试。`, 'error'); }
 // 授权回调失败会带着 ?error= 回到本页；读出后从地址栏去掉，刷新时不再重复提示。
 const returned = /[?&]error=([A-Za-z0-9_-]{1,80})/.exec(String(window.location?.search || ''))?.[1];
 if (returned) window.history?.replaceState?.(null, '', '/');
@@ -30,7 +30,7 @@ async function refresh() {
   const state = await api('/api/status');
   $('setup').hidden = state.configured;
   $('address').hidden = !state.workerUrl;
-  $('address').textContent = state.workerUrl ? `本 Worker 地址：${state.workerUrl}` : '';
+  $('address').textContent = state.workerUrl || '';
   $('login').hidden = !state.configured || state.loggedIn;
   $('controls').hidden = !state.loggedIn;
   $('diagnostics-box').hidden = !state.loggedIn;
@@ -40,24 +40,21 @@ async function refresh() {
     `最近消息：${time(d.inboundAt)} · ${d.result || '尚无'}（类型 ${d.messageType ?? '—'}，状态 ${d.messageState ?? '—'}）`].join('\n');
 
   if (!state.configured) {
-    steps(-1); say('部署完成，还差几项平台配置。', 'warn');
+    steps(-1); say('还差几项配置。', 'warn');
     $('missing').replaceChildren(...state.missing.map(name => { const li = document.createElement('li'); li.textContent = name; return li; })); return;
   }
   csrf = state.csrf || '';
   if (!state.loggedIn) {
     steps(0);
-    return state.notice ? say(describe(state.notice) || '请重新授权你的平台账户。', 'warn') : say('第一步：授权你的平台账户。');
+    return say(state.notice ? describe(state.notice) || '请重新授权。' : '', 'warn');
   }
   steps(state.connected ? 2 : 1);
-  $('wx-status').textContent = state.connected ? '微信已连接' : '微信未连接';
-  $('wx-status').className = 'badge' + (state.connected ? ' on' : '');
   $('disconnect').hidden = !state.connected;
   $('qr-button').hidden = state.connected;
   if (state.connected) clearQr();
-  if (state.cooldownUntil > Date.now()) say(`微信暂时限制了这个连接，${new Date(state.cooldownUntil).toLocaleTimeString()} 后会自动重试。`, 'warn');
-  else if (state.error) say(describe(state.error) || `后台遇到问题（${state.error}），会自动重试。`, 'warn');
-  else if (state.connected) say(state.running ? '已连接，正在处理一个任务。' : '已连接。在微信里给 Bot 发条消息试试，发送 /help 查看命令。', 'ok');
-  else say('第二步：生成二维码，用微信扫一扫。');
+  if (state.cooldownUntil > Date.now()) say(`微信暂时限制了连接，${new Date(state.cooldownUntil).toLocaleTimeString()} 后自动重试。`, 'warn');
+  else if (state.error) say(describe(state.error) || `后台出错（${state.error}），会自动重试。`, 'warn');
+  else say(state.connected ? (state.running ? '已连接，正在处理任务。' : '已连接，可以在微信里对话了。') : '', 'ok');
 }
 async function scan(myGeneration, code) {
   try {
@@ -89,11 +86,11 @@ $('qr-button').onclick = async () => {
 };
 $('verify').onsubmit = event => { event.preventDefault(); const code = $('code').value; $('code').value = ''; $('verify').hidden = true; scan(generation, code); };
 $('disconnect').onclick = async () => {
-  if (!confirm('断开后微信将收不到回复，需要重新扫码才能使用。如果有任务正在进行，可以先在微信发送 /cancel。确定断开吗？')) return;
+  if (!confirm('断开后需要重新扫码才能使用，确定断开吗？')) return;
   clearQr(); try { await api('/api/disconnect', {}); await refresh(); } catch (e) { showError(e); }
 };
 $('revoke').onclick = async () => {
-  if (!confirm('撤销平台授权，并清除 Worker 里保存的凭证和微信连接？平台上的聊天记录不受影响。')) return;
+  if (!confirm('撤销授权并清除 Worker 里的凭证和微信连接？')) return;
   clearQr(); try { await api('/api/revoke', {}); await refresh(); } catch (e) { showError(e); }
 };
 refresh().then(() => { if (returned) showError(new Error(returned)); }).catch(showError);
