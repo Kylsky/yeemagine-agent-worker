@@ -1,0 +1,15 @@
+YeeMagine Agent Worker
+
+微信 iLink 协议参考：
+Tencent/openclaw-weixin，MIT License
+https://github.com/Tencent/openclaw-weixin
+参考提交：874637a0dbc24050f72d1385add4fc6170a2d726
+参考 channel_version：2.4.10
+参考文件：docs/protocol_zh_CN.md、src/auth/login-qr.ts、src/cdn/cdn-upload.ts
+本项目为独立实现，没有包含上游完整插件或其品牌素材。
+
+Cloudflare 一键部署入口参考：
+https://github.com/ISheepp/Moni
+https://developers.cloudflare.com/workers/platform/deploy-buttons/
+
+运行时依赖 qrcode 及开发依赖的许可证以相应 npm 包为准。

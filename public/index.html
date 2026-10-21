@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YeeMagine · 微信 Agent</title><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body><main>
+<header><span class="mark">Y</span><span>YeeMagine <span class="muted">/ 微信 Agent</span></span><span class="tag">个人部署</span></header>
+<section class="intro"><p class="eyebrow">你的 Agent，现在在微信里。</p><h1>连接一次，<br>随时对话与创作。</h1><p>使用平台账户授权，再扫码连接微信。对话与生图能力、可用模型和积分由你的平台账户提供。</p></section>
+<section class="panel" aria-labelledby="connect-title"><h2 id="connect-title">连接你的账户</h2><p id="message" role="status" aria-live="polite">正在读取连接状态…</p>
+<div id="setup" hidden><p>请在 Cloudflare Worker 的“设置 → 变量和机密”中完成以下配置：</p><ul id="missing"></ul><p>将 Worker 根地址登记到平台的个人授权应用，再填写对应凭证。设置后刷新此页。</p></div>
+<form action="/auth/login" method="post" id="login" hidden><button type="submit">使用平台账户授权</button><p class="hint">仅允许配置中指定的平台账户登录。无需填写平台密码或 API Key。</p></form>
+<div id="controls" hidden><div class="steps"><span>① 平台已授权</span><span id="wx-status">② 微信待连接</span></div><div class="actions"><button id="qr-button">生成微信二维码</button><button id="disconnect" class="secondary" hidden>断开微信</button><button id="revoke" class="quiet">撤销授权并清除本地数据</button></div>
+<div id="qr-area" hidden><img id="qr" alt="使用微信扫描此二维码"><p id="scan-status">请使用微信扫码</p><form id="verify" hidden><label for="code">微信验证码</label><input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{4,10}" maxlength="10"><button>提交验证码</button></form></div></div>
+</section>
+<section class="commands"><h2>从微信开始</h2><div><code>/help</code><span>查看全部命令</span><code>/models</code><span>查看模型列表</span><code>/model 1</code><span>切换对话模型</span><code>/balance</code><span>查看积分余额</span><code>/image 描述</code><span>发起图片创作</span><code>/new</code><span>开始新对话</span></div><p class="hint">生图报价会在微信中展示，回复“确认”后执行。每次处理一个任务。</p></section>
+<footer>本实例仅服务一位用户。Worker 不持久保存消息正文或图片；微信、平台及其模型服务按各自规则处理数据。<a href="https://github.com/Kylsky/yeemagine-agent-worker" target="_blank" rel="noopener noreferrer">查看开源项目 ↗</a></footer>
+</main></body></html>

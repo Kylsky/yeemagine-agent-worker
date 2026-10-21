@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yeemagine-agent-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "keep_vars": true,
+  "observability": { "enabled": false },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": { "bindings": [{ "name": "CONNECTION", "class_name": "ConnectionDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConnectionDO"] }],
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": {
+    "PLATFORM_BASE_URL": "",
+    "PUBLIC_BASE_URL": "",
+    "OAUTH_CLIENT_ID": "",
+    "PLATFORM_USER_ID": ""
+  }
+}

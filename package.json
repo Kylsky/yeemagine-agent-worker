@@ -1,0 +1,28 @@
+{
+  "name": "yeemagine-agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "个人部署的 YeeMagine 微信 Agent 网关",
+  "repository": "github:Kylsky/yeemagine-agent-worker",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": { "qrcode": "1.5.4" },
+  "devDependencies": { "wrangler": "4.151.3" },
+  "cloudflare": {
+    "bindings": {
+      "PLATFORM_BASE_URL": { "description": "YeeMagine 平台 HTTPS 根地址；首次部署可留空，部署后设置" },
+      "PUBLIC_BASE_URL": { "description": "当前 Worker HTTPS 根地址；首次部署后设置" },
+      "OAUTH_CLIENT_ID": { "description": "平台个人授权应用的 Client ID" },
+      "PLATFORM_USER_ID": { "description": "应用所有者的平台 userId，必须精确匹配" },
+      "OAUTH_CLIENT_SECRET": { "description": "平台个人授权应用的 Client Secret" },
+      "CREDENTIAL_ENCRYPTION_KEY": { "description": "独立生成的 64 位十六进制随机密钥，切勿使用 Client Secret" }
+    }
+  }
+}
