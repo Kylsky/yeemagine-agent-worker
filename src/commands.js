@@ -86,9 +86,13 @@ export function balanceText(data) {
   if (e && Number(e.amount) > 0) lines.push(`其中 ${credit(e.amount)} 积分将在${e.daysUntil ? ` ${e.daysUntil} 天内` : '近期'}到期`);
   return lines.join('\n');
 }
+export const GAVE_UP = '平台暂时没有响应，这条消息没能处理，请稍后重发。';
+export const UNDELIVERABLE = '这次的结果暂时发不出去，请到平台查看。';
+export const IMAGE_TOO_LARGE = '有一张图片无法通过微信发送，请到平台查看。';
 // 平台或微信拒绝某条消息时，回一句能照着做的话，而不是错误码。
 const FAILURES = {
   AGENT_CREDIT_INSUFFICIENT: '积分不足，请到平台充值后再试。',
+  OAUTH_DISABLED: '平台暂停了开放授权，请稍后再试。',
   BODY_TOO_LARGE: '图片太大了，请发送 8 MB 以内的图片。',
   UNSUPPORTED_IMAGE: '暂不支持这种图片格式，请发送 PNG、JPG、GIF 或 WebP 图片。',
   INVALID_MEDIA: '图片读取失败，请重新发送。',

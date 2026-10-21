@@ -1,99 +1,106 @@
-# YeeMagine 微信 Agent Worker
+# YeeMagine 微信助手
 
-把自己的 YeeMagine 平台账户连接到微信，在微信里对话、切换模型、查积分、上传参考图和生成图片。每个 Worker 服务 **一个平台账户和一个微信账户**。
+把 YeeMagine 平台的 Agent 接进你的微信：对话、生图、查积分。一个 Worker 只服务你自己。
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Kylsky/yeemagine-agent-worker)
 
-> 当前为首版实现，尚未完成真实微信与生产平台端到端验收。点击上方按钮可进入 Cloudflare 官方部署向导。不要把源码测试通过等同于生产验收。
+> 首版实现，尚未完成真实微信与生产平台的端到端验收。
 
-## 功能
+## 部署
 
-- 仅通过本平台 OAuth 授权码 + PKCE 登录，精确校验配置的 userId 和 Client ID。
-- 微信二维码登录、验证码、长轮询、断线退避及定时恢复。
-- 文本与图片输入、文字与图片输出；不支持群聊、语音、视频、文件。
-- 平台 Agent 报价必须先展示，再由用户回复“确认”；报价变化后重新确认。
-- 一个活动任务，不排队；平台提交使用消息 HMAC 幂等键。
-- AES-GCM 加密持久凭证与回复地址。Worker 不持久保存消息正文、生成结果正文、图片、二维码内容、验证码或积分余额。
-- 一个 SQLite Durable Object；无需 D1、KV、R2、外部数据库或常驻服务器。
+### 1. 部署 Worker
 
-旧方案中的 business 多用户模式不在本版范围内。多个用户应各自部署、各自创建个人 OAuth 应用。
+点击上方按钮，按 Cloudflare 向导完成部署。向导里的配置项**可以先留空**；如果向导要求填写 Secret，先填一个占位值，第 4 步再替换。
 
-## 一键部署
+### 2. 复制 Worker 地址
 
-### 1. 创建 Worker
+打开部署好的 Worker，页面上会显示它的地址，形如 `https://名称.账户.workers.dev`。不需要自定义域名。
 
-点击上方按钮，在 Cloudflare 授权 GitHub 并按页面提示复制仓库、部署。配置文件会自动声明 Durable Object 和定时任务。
+### 3. 在平台创建应用
 
-首次部署还没有 Worker 域名及平台应用时，可先保留配置为空：页面会显示缺失项，**不会开放未认证的配置接口或消息服务**。若部署向导要求 Secret 值，先填写随机占位值，随后必须替换。
+在平台「用户信息 → 授权应用」点击「创建应用」，填入上一步的地址。地址填错了可以在「编辑」里修改。
 
-### 2. 在平台登记应用
+> 需要平台管理员先在「系统设置」里开启开放授权。
 
-1. 平台管理员启用个人 OAuth 功能，并确认 Agent、积分、图片服务可用。
-2. 打开平台「用户中心 → 授权应用」，创建个人应用。
-3. 填写刚部署的 Worker HTTPS 根地址，例如 `https://your-worker.your-subdomain.workers.dev`。
-4. 保存平台给出的 Client ID、Client Secret 和所有者 userId。回调地址固定为 Worker 根地址加 `/auth/callback`。
+### 4. 填写配置
 
-平台须已部署个人 OAuth 接口。普通 OpenAI 兼容 API 或其他 OAuth 提供方不能直接替代。
+在 Cloudflare「Workers 和 Pages → 你的 Worker → 设置 → 变量和机密」中填写平台给出的 4 项，保存后重新部署：
 
-### 3. 只填写 4 项平台配置
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `PLATFORM_BASE_URL` | 文本 | 平台地址，需能从公网通过 HTTPS 访问 |
+| `PLATFORM_USER_ID` | 文本 | 平台显示的用户 ID（不是邮箱） |
+| `OAUTH_CLIENT_ID` | 文本 | 应用的 Client ID |
+| `OAUTH_CLIENT_SECRET` | 密钥 | 应用的 Client Secret |
 
-按「平台地址 → 用户 ID → Client ID → Client Secret」准备以下配置。Cloudflare 官方向导会把 Secret 单独放在普通变量前面；这是向导自身的分组，不影响配置含义。也可在「Workers & Pages → 当前 Worker → 设置 → 变量和机密」中填写，保存部署后生效。
+### 5. 授权并扫码
 
-| 名称 | 类型 | 内容 |
-|---|---|---|
-| `PLATFORM_BASE_URL` | 文本 | 公网可访问的平台 HTTPS 根地址，不能填 localhost 或包含路径、查询参数 |
-| `PLATFORM_USER_ID` | 文本 | 复制平台应用显示的 userId，不是邮箱或昵称 |
-| `OAUTH_CLIENT_ID` | 文本 | 个人应用 Client ID |
-| `OAUTH_CLIENT_SECRET` | Secret | 应用 Client Secret |
+打开 Worker 页面 → 使用平台账户授权 → 生成微信二维码 → 微信扫码确认。之后关掉网页也能正常收发。
 
-无需填写 Worker 地址或手工生成加密密钥：
+## 在微信里使用
 
-- 域名直接使用 Cloudflare 提供的 `https://<名称>.<账户子域>.workers.dev`，不要求自定义域名。Worker 根据当前 HTTPS 请求地址生成回调；平台仍须登记完全一致的地址。
-- 32 字节（256 bit）随机密钥由程序首次需要时生成，保存在本实例 Durable Object，重启及代码更新后复用，不返回浏览器。
-- 首次部署后打开 Worker 页面，可直接看到应登记到平台的应用地址。
+| 命令 | 作用 |
+| --- | --- |
+| 直接发文字 | 和 Agent 对话 |
+| `/image 描述` | 生成图片，先报价，回复「确认」才执行 |
+| `/new` | 开始新对话 |
+| `/model`、`/model 序号` | 查看、切换模型 |
+| `/balance` | 查看积分 |
+| `/status` | 查看连接和任务状态 |
+| `/cancel` | 取消当前任务 |
+| `/help` | 查看全部命令 |
 
-原有 `PUBLIC_BASE_URL` 与 `CREDENTIAL_ENCRYPTION_KEY` 仍作为高级可选配置兼容，但不在一键部署表单中出现。前者可锁定唯一 HTTPS origin；后者可提供独立于数据库保存的 64 位十六进制 Secret。默认自动密钥与密文同库存储，不能防御完整数据库泄露；需要密钥与存储隔离时再使用独立 Secret。
+中文命令同样可用：`/新对话` `/生图` `/模型` `/余额` `/状态` `/取消`。
 
-请勿把真实值写入 Git、Issue 或日志。`keep_vars` 保留控制台设置的普通变量；Client Secret 通过 Cloudflare 单独管理。
+- **参考图**：先发图片，30 分钟内再发要求。最多 4 张，单张不超过 8 MB。
+- **补充问题**：有选项时回复序号即可；多个问题按 `1=答案` 分行回复。
+- **一次一个任务**：任务进行中不接新消息，可以先 `/cancel`。
+- **普通斜杠文字**：用 `//` 开头，例如 `//help` 会原样发送 `/help`。
 
-### 4. 授权并扫码
+## 隐私
 
-打开 Worker 页面 → 使用平台账户授权 → 生成微信二维码 → 微信扫码确认。如微信要求验证码，在页面输入。页面关闭后，已连接的 Worker 仍通过 Durable Object alarm 工作。
+- 只处理扫码本人发来的私聊消息。
+- 不保存消息正文、生成结果、图片、二维码和验证码，只加密保存连接所需的凭证。
+- 平台授权失效或被撤销时，自动清除本地凭证和微信连接。
+- 默认关闭 Worker 日志。自行开启日志可能记录授权码、验证码等敏感信息。
+- 加密密钥默认和数据存在同一个 Durable Object 里，挡不住存储整体泄露；需要分开保存时见下方「高级配置」。
 
-变更平台地址、Client ID、userId 或高级密钥/固定地址配置会使本地状态清空，需要重新授权、扫码。更新 Client Secret 不清空状态。改用另一个域名时，须先更新平台登记地址，并在新域名重新授权。若浏览器会话过期，重新授权也会建立全新连接。
+详见 [隐私与威胁边界](docs/privacy.md)。
 
-本仓库不包含真实平台域名或凭证；部署时使用你自己的平台应用和 Cloudflare 账户。
+## 常见问题
 
-## 微信命令
+**页面一直提示还差几项配置**
+确认 4 项都已保存并重新部署。`PLATFORM_BASE_URL` 不能是 localhost，也不能带路径。
 
-| 命令 | 用途 |
-|---|---|
-| `/help`、`/帮助` | 帮助 |
-| `/models`、`/model`、`/模型` | 模型列表 |
-| `/model 1`、`/模型 1` | 切换模型 |
-| `/balance`、`/余额` | 当前积分余额 |
-| `/status`、`/状态` | 当前连接及任务状态 |
-| `/new`、`/新对话` | 清空参考图，开始新对话 |
-| `/cancel`、`/取消` | 请求取消当前任务 |
-| `/image 描述`、`/生图 描述` | 图片生成 |
+**提示 Client Secret 不正确**
+平台上重置过密钥后，需要把新密钥更新到 `OAUTH_CLIENT_SECRET`。
 
-直接发送文字即可对话。先发参考图，再在 30 分钟内发要求；最多保留 4 张参考图，单张上限 8 MiB。该上限为实现保护值，仍需在真实微信链路中验证。引用消息的斜杠命令不执行；未知命令不提交平台；`//` 可转义为普通斜杠文本。
+**网页登录过期了**
+重新点授权即可，已连接的微信会保留。
 
-报价后发送「确认」或「取消」。补充信息只有一个问题时直接回答，多个问题用 `1=答案` 分行回答；单个图片问题可直接发送图片。多个问题包含图片时，可在同一条消息中附图，并使用 `1=图片1` 指向本条消息的第一张图片。
+**换了 Worker 地址**
+先在平台「编辑」应用改地址，再到新地址重新授权、扫码。
 
-## 运行与隐私
+**改了平台地址、用户 ID 或 Client ID**
+本地连接会被清空，需要重新授权、扫码。只改 Client Secret 不受影响。
 
-- 每个实例只接受扫码所绑定用户的私聊消息。OAuth owner 与配置不匹配时拒绝连接。
-- OAuth 访问令牌自动刷新；`invalid_grant` 或刷新后仍 401 时清除本地授权、微信连接及任务状态。
-- 平台 `OAUTH_DISABLED` 表示暂停，保留凭证并退避恢复。`invalid_client` 应检查 Client Secret。
-- 微信 `-14` 冷却一小时；其他故障指数退避，最长十分钟。定时任务每十分钟检查是否缺少 alarm。
-- 消息去重最多保留 500 个 HMAC / 3 天，回复进度只存分段计数。网络中断可能产生重复回复；**不承诺微信投递 exactly-once**。
-- 断开微信会清除本地微信与对话状态，但不会取消平台已接受的任务。先用 `/cancel` 再断开；平台已有聊天记录不会被删除。
-- 凭证加密不代表部署管理员无法解密。Cloudflare 平台备份/保留策略也不受应用内删除控制。
-- 默认关闭 Worker observability，无应用日志、分析脚本或第三方字体。主动开启日志/请求采样可能暴露 OAuth code 或微信验证码，请自行评估。
-- 长轮询、alarm、存储和外部调用会消耗 Cloudflare 配额，平台对话/生图消耗平台积分；一键部署不代表免费运行。
+**平台暂停了开放授权**
+连接会保留，平台恢复后自动继续。
 
-详见 [隐私与威胁边界](docs/privacy.md)、[协议与架构](docs/architecture.md)、[验收清单](docs/acceptance.md)。
+**偶尔收到重复回复**
+网络中断时可能重发同一段回复，不会重复扣积分。
+
+**费用**
+长轮询会持续消耗 Cloudflare 用量；对话和生图消耗平台积分。
+
+## 高级配置（可选）
+
+| 名称 | 作用 |
+| --- | --- |
+| `PUBLIC_BASE_URL` | 锁定唯一的 Worker 地址 |
+| `CREDENTIAL_ENCRYPTION_KEY` | 64 位十六进制密钥，让加密密钥和数据分开保存 |
+
+修改这两项会清空本地连接，需要重新授权、扫码。
 
 ## 本地开发
 
@@ -101,17 +108,16 @@
 
 ```sh
 npm ci
-cp .dev.vars.example .dev.vars
-# 仅在本地 .dev.vars 中填入测试环境凭证；不要提交
+cp .dev.vars.example .dev.vars   # 只填测试环境凭证，不要提交
 npm test
 npm run check
 npm run dev
 ```
 
-`test` 为源码单元/流程测试；`check` 仅检查 JS 语法和配置约束，不编译。真实 OAuth 使用 Secure Cookie 和 HTTPS 回调，本地联调需配置受控 HTTPS 域名并在测试平台登记，普通 HTTP localhost 不支持完整登录。
+完整登录需要 HTTPS 回调，普通 HTTP 的 localhost 走不通授权。发布用 `npm run deploy`，或使用 Cloudflare 的 Git 集成自动部署。
 
-发布时执行 `npm run deploy` 或通过 Cloudflare Git 集成部署。不提供 `build` 脚本，Wrangler 部署时负责打包；本次开发未执行部署或编译。
+更多文档：[协议与架构](docs/architecture.md) · [验收清单](docs/acceptance.md)
 
-## 上游与许可证
+## 许可证
 
-本项目采用 MIT。微信协议依据腾讯 [openclaw-weixin](https://github.com/Tencent/openclaw-weixin)，部署入口参考 [Moni](https://github.com/ISheepp/Moni) 和 [Cloudflare Deploy 按钮文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。协议版本及来源记录见 [NOTICE](NOTICE)。本项目不是腾讯或 Cloudflare 官方产品。
+MIT。微信协议参考腾讯 [openclaw-weixin](https://github.com/Tencent/openclaw-weixin)，部署按钮参考 [Moni](https://github.com/ISheepp/Moni) 和 [Cloudflare 文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)，来源记录见 [NOTICE](NOTICE)。本项目不是腾讯或 Cloudflare 的官方产品。

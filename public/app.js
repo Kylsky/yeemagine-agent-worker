@@ -65,9 +65,16 @@ async function scan(myGeneration, code) {
     if (data.status === 'confirmed') { clearQr(); await refresh(); return; }
     if (['expired','verify_code_blocked','binded_redirect'].includes(data.status)) { generation++; return; }
     if (data.status === 'need_verifycode') { $('verify').hidden = false; return; }
-    setTimeout(() => { if (myGeneration === generation) scan(myGeneration); }, 1500);
-  } catch (e) { if (myGeneration === generation) showError(e); }
+    setTimeout(() => { if (myGeneration === generation) scan(myGeneration); }, 1000);
+  } catch (e) {
+    if (myGeneration !== generation) return;
+    if (scanStops.has(e.message)) return showError(e);
+    // 网络抖动或上一个查询还没结束时不中断扫码，稍后带着同样的验证码继续查询。
+    $('scan-status').textContent = '网络不稳定，正在重试…';
+    setTimeout(() => { if (myGeneration === generation) scan(myGeneration, code); }, 2000);
+  }
 }
+const scanStops = new Set(['QR_EXPIRED', 'LOGIN_REQUIRED', 'INVALID_VERIFY_CODE', 'DISCONNECT_FIRST', 'INVALID_WEIXIN_LOGIN']);
 // 原生表单在 no-referrer 下会提交 Origin: null；fetch 保留同源 Origin。
 $('login').onsubmit = async event => {
   event.preventDefault();
@@ -84,13 +91,18 @@ $('qr-button').onclick = async () => {
   try { const data = await api('/api/qr', {}); qrUrl = URL.createObjectURL(new Blob([data.svg], { type:'image/svg+xml' })); $('qr').src = qrUrl; $('scan-status').textContent = '请用微信扫一扫'; $('qr-area').hidden = false; scan(generation); }
   catch (e) { showError(e); } finally { $('qr-button').disabled = false; }
 };
-$('verify').onsubmit = event => { event.preventDefault(); const code = $('code').value; $('code').value = ''; $('verify').hidden = true; scan(generation, code); };
+// 提交验证码时让旧的查询循环失效，只保留带验证码的这一条，避免两条循环同时查询。
+$('verify').onsubmit = event => { event.preventDefault(); const code = $('code').value; $('code').value = ''; $('verify').hidden = true; scan(++generation, code); };
 $('disconnect').onclick = async () => {
   if (!confirm('断开后需要重新扫码才能使用，确定断开吗？')) return;
   clearQr(); try { await api('/api/disconnect', {}); await refresh(); } catch (e) { showError(e); }
 };
 $('revoke').onclick = async () => {
   if (!confirm('撤销授权并清除 Worker 里的凭证和微信连接？')) return;
-  clearQr(); try { await api('/api/revoke', {}); await refresh(); } catch (e) { showError(e); }
+  clearQr();
+  try {
+    const data = await api('/api/revoke', {}); await refresh();
+    if (data.platformRevoked === false) say('本地数据已清除。平台暂时连不上，请到平台「授权应用」里再撤销一次。', 'warn');
+  } catch (e) { showError(e); }
 };
 refresh().then(() => { if (returned) showError(new Error(returned)); }).catch(showError);

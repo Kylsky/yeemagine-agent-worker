@@ -69,12 +69,16 @@ export class Weixin {
     const url = new URL('/ilink/bot/get_qrcode_status', weixinUrl(scan.baseurl).origin);
     url.searchParams.set('qrcode', scan.qrcode);
     if (code) url.searchParams.set('verify_code', code);
-    const res = await request(url, { headers: this.headers(true) }, 40000, this.fetcher);
+    // 与官方插件一致：扫码状态是 35 秒长轮询，超时或网络抖动都当作“还在等待”，由页面继续查询。
+    let res;
+    try { res = await request(url, { headers: this.headers(true) }, 35000, this.fetcher); }
+    catch (e) { if (String(e.code).startsWith('NETWORK_')) return { status: 'wait' }; throw e; }
     if (!res.ok) throw new Fault('WEIXIN_QR_FAILED');
     return jsonBody(res);
   }
-  async updates(bot, cursor) {
-    try { return await this.call(bot, 'getupdates', { get_updates_buf: cursor || '' }, 40000); }
+  // timeout 取服务端上次建议的 longpolling_timeout_ms（默认 35 秒），本地多留 5 秒，避免服务端刚好返回时被中止。
+  async updates(bot, cursor, timeout = 35000) {
+    try { return await this.call(bot, 'getupdates', { get_updates_buf: cursor || '' }, timeout + 5000); }
     catch (e) {
       // 长轮询没有新消息时超时是正常状态，不触发指数退避。
       if (e.code === 'NETWORK_TIMEOUT') return { msgs: [], get_updates_buf: cursor || '' };
