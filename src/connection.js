@@ -4,7 +4,7 @@ import { config, origin, json, jsonBody, Fault, safeCode } from './http.js';
 import { Platform } from './platform.js';
 import { Weixin, API, weixinUrl } from './weixin.js';
 import { empty } from './state.js';
-import { HELP, parse, chunks, confirmationText, inputText, answersFor } from './commands.js';
+import { HELP, parse, chunks, confirmationText, inputText, answersFor, balanceText, failureText } from './commands.js';
 
 const minute = 60000;
 const cookie = (name, value, maxAge) => `__Host-${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
@@ -89,14 +89,22 @@ export class Connection {
       // 部署或运行中断后恢复丢失的轮询；正在执行的轮询自行安排下一次。
       if (session && s.oauth && s.bot && !this.busy) await this.wake();
       return json(session ? { configured: true, loggedIn: true, connected: !!s.bot, running: !!s.run, model: s.model || null,
-        diagnostics: s.diagnostics || {}, nextPollAt: await this.repo.getAlarm(), error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
+        diagnostics: s.diagnostics || {}, nextPollAt: await this.repo.getAlarm(), error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback', ...this.signedOutNotice(req, s) });
     }
     if (req.method === 'POST') {
       if (req.headers.get('Origin') !== publicOrigin) throw new Fault('INVALID_ORIGIN', 403);
       if (path !== '/auth/login' && (!session || !equal(req.headers.get('X-CSRF-Token'), this.csrf(session)))) throw new Fault('LOGIN_REQUIRED', 401);
     }
     if (path === '/auth/login' && req.method === 'POST') return this.login(publicOrigin);
-    if (path === '/auth/callback' && req.method === 'GET') return this.callback(req, url);
+    if (path === '/auth/callback' && req.method === 'GET') {
+      try { return await this.callback(req, url); }
+      catch (e) {
+        // 回调是浏览器整页跳转，出错时回到连接页由页面给出说明，而不是停在一段 JSON 上。
+        const headers = new Headers({ Location: '/?error=' + encodeURIComponent(safeCode(e)) });
+        headers.append('Set-Cookie', cookie('transaction', '', 0));
+        return new Response(null, { status: 303, headers });
+      }
+    }
     if (!session) throw new Fault('LOGIN_REQUIRED', 401);
     if (req.method !== 'POST') throw new Fault('NOT_FOUND', 404);
     // Disconnect remains available even while the platform is suspended or unavailable.
@@ -176,15 +184,22 @@ export class Connection {
     this.guard(s.epoch);
     if (!token.access_token || !token.refresh_token || !token.expires_in) throw new Fault('INVALID_TOKEN_RESPONSE');
     const me = await this.platform.api(token.access_token, '/oauth/me'); this.guard(s.epoch); this.identity(me);
-    const session = random();
-    this.reset();
-    this.patch({ oauth: this.box({ access_token: token.access_token, refresh_token: token.refresh_token, expiresAt: Date.now() + token.expires_in * 1000 }, 'oauth'),
+    const session = random(), current = this.read();
+    // identity() 已保证仍是配置中的同一账户；网页登录过期后重新授权不应清掉已连接的微信。
+    // 递增代际，让旧令牌下仍在进行的请求作废、不能回写状态。
+    this.repo.write({ ...current, epoch: current.epoch + 1, transaction: null, error: null, failures: 0,
+      oauth: this.box({ access_token: token.access_token, refresh_token: token.refresh_token, expiresAt: Date.now() + token.expires_in * 1000 }, 'oauth'),
       sessionOrigin: url.origin, sessionHash: this.hash(session), sessionUntil: Date.now() + 7 * 86400000, identityAt: Date.now() });
     await this.repo.alarm(Date.now() + minute);
     const headers = new Headers({ Location: '/' });
     headers.append('Set-Cookie', cookie('session', session, 7 * 86400));
     headers.append('Set-Cookie', cookie('transaction', '', 0));
     return new Response(null, { status: 303, headers });
+  }
+  // 只对曾在本浏览器登录过的人说明为什么要重新授权，不向陌生访问者透露连接状态。
+  signedOutNotice(req, s) {
+    if (!getCookie(req, 'session')) return {};
+    return { notice: ['AUTHORIZATION_EXPIRED', 'IDENTITY_MISMATCH'].includes(s.error) ? s.error : 'SESSION_EXPIRED' };
   }
   async wake() { if (!await this.repo.getAlarm()) await this.repo.alarm(Date.now() + 1000); }
   cleanup(epoch) {
@@ -214,10 +229,8 @@ export class Connection {
       s = this.read();
       if (!s.bot) { delay = minute; return; }
       if (s.cooldownUntil > Date.now()) { delay = Math.min(s.cooldownUntil - Date.now(), minute); return; }
-      if (s.run && s.route) await this.deliver(epoch);
-      s = this.read();
       const bot = this.open(s.bot, 'bot');
-      const batch = await this.wx.updates(bot, s.cursor); this.guard(epoch);
+      const batch = await this.receive(bot, s.cursor, epoch); this.guard(epoch);
       this.patch({ diagnostics: { ...this.read().diagnostics, pollAt: Date.now(), batchSize: (batch.msgs || []).length } }, epoch);
       const deadline = Date.now() + 20000;
       let complete = true;
@@ -226,9 +239,10 @@ export class Connection {
         try { await this.message(msg, epoch); }
         catch (e) {
           this.guard(epoch);
-          if ([400, 403, 404, 413, 415].includes(e.status) && msg.from_user_id && equal(this.hash(msg.from_user_id), this.read().ownerHash) && msg.message_id) {
+          // 余额不足（402）、会话状态冲突（409）等重试也不会变好，直接告诉用户并跳过这条消息。
+          if ([400, 402, 403, 404, 409, 413, 415].includes(e.status) && msg.from_user_id && equal(this.hash(msg.from_user_id), this.read().ownerHash) && msg.message_id) {
             const key = this.hash('message:' + msg.from_user_id + ':' + msg.message_id);
-            await this.send(`这条消息无法处理（${safeCode(e)}），请调整后重新发送。`, epoch, key);
+            await this.send(failureText(safeCode(e)), epoch, key);
             this.mark(key, epoch, { inbound: null });
           } else throw e;
         }
@@ -250,6 +264,19 @@ export class Connection {
       if (delay) await this.repo.alarm(Date.now() + delay);
       else await this.repo.deleteAlarm();
     }
+  }
+  // 微信长轮询最长约 35 秒。有任务在跑时边等边按退避查询进度，结果不用等这一轮轮询结束才发出。
+  async receive(bot, cursor, epoch) {
+    let settled = false, wait = 0, timer;
+    const poll = this.wx.updates(bot, cursor).finally(() => { settled = true; });
+    while (!settled && this.read().run && this.read().route) {
+      await Promise.race([poll.catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, wait); })]);
+      clearTimeout(timer);
+      if (settled) break;
+      await this.deliver(epoch);
+      wait = Math.min(Math.max(wait * 2, 2000), 15000);
+    }
+    return poll;
   }
   async send(text, epoch, id = random(12)) {
     const s = this.read(); this.guard(epoch);
@@ -289,29 +316,29 @@ export class Connection {
     if (command.command && items.some(i => i.ref_msg)) return reply('引用消息中的命令不执行，请单独发送命令。');
     let s = this.read();
     if (command.command === 'help') return reply(HELP);
-    if (command.command === 'unknown') return reply('未知命令。发送 /help 查看帮助；普通文本以 // 开头可保留斜杠。');
-    if (command.command === 'status') return reply(`微信已连接；${s.run ? '任务进行中' : '空闲'}；模型：${s.model || '平台默认'}。`);
+    if (command.command === 'unknown') return reply('没有这个命令，发送 /help 查看全部命令。\n如果想发以斜杠开头的普通文字，请用 // 开头。');
+    if (command.command === 'status') return reply(`微信已连接\n当前任务：${s.run ? '进行中' : '无'}\n对话模型：${s.model || '平台默认'}`);
     if (command.command === 'balance') {
       const data = await this.api('/v1/account/balance', undefined, undefined, epoch);
-      return reply(`积分余额：${JSON.stringify(data.balance)}\n即将过期：${JSON.stringify(data.expiring)}`);
+      return reply(balanceText(data));
     }
     if (command.command === 'models' || command.command === 'model') {
       const data = await this.api('/v1/agent/models', undefined, undefined, epoch);
       if (command.text && command.command === 'model') {
-        if (s.run) return reply('请等待当前任务完成后切换模型。');
+        if (s.run) return reply('当前任务完成后才能切换模型。');
         if (!/^\d+$/.test(command.text) || !data.models[Number(command.text) - 1]) return reply('模型序号无效，请发送 /models 查看。');
         const model = data.models[Number(command.text) - 1];
-        this.patch({ model: model.id }, epoch); return reply('已切换：' + model.label);
+        this.patch({ model: model.id }, epoch); return reply('已切换到：' + model.label);
       }
-      return reply(data.models.map((m, i) => `${i + 1}. ${m.label}${m.id === s.model ? '（当前）' : ''}`).join('\n') + '\n发送 /model 序号 切换。');
+      return reply('可用模型：\n' + data.models.map((m, i) => `${i + 1}. ${m.label}${m.id === s.model ? '（当前）' : ''}`).join('\n') + '\n\n发送「/model 序号」切换。');
     }
     if (command.command === 'cancel' || (!command.command && command.text === '取消' && s.run)) {
       if (!s.run) return reply('当前没有任务。');
       await this.api(`/v1/agent/runs/${encId(s.run.id)}/cancel`, {}, undefined, epoch);
-      return reply('已提交取消，正在等待任务结束。');
+      return reply('已提交取消，任务停下后会通知你。');
     }
     if (command.command === 'new') {
-      if (s.run) return reply('请先等待任务结束或发送 /cancel。');
+      if (s.run) return reply('当前任务还没结束，请等它完成，或发送 /cancel 取消。');
       this.patch({ thread: null, refs: [] }, epoch); return reply('已开始新对话。');
     }
     if (s.run) {
@@ -319,12 +346,12 @@ export class Connection {
       if (run.pendingAction?.type === 'confirmation' && command.text === '确认' && !command.command) {
         const pending = run.pendingAction;
         if (this.hash(JSON.stringify(pending)) !== s.run.noticeHash) {
-          await this.deliver(epoch); return reply('报价已更新或尚未完整送达，请核对最新报价后再次回复“确认”。');
+          await this.deliver(epoch); return reply('报价有更新，请看最新报价后再回复「确认」。');
         }
         try {
           await this.api(`/v1/agent/runs/${encId(s.run.id)}/confirmation`, { action: 'confirm', confirmations: pending.confirmations.map(c => ({ confirmationId: c.confirmationId, confirmationHash: c.confirmationHash })) }, undefined, epoch);
-        } catch (e) { if (e.status === 409) { await this.deliver(epoch); return reply('报价状态已改变，请核对最新信息后重试。'); } throw e; }
-        return reply('已确认，正在执行。');
+        } catch (e) { if (e.status === 409) { await this.deliver(epoch); return reply('报价已变化，请看最新报价后再确认。'); } throw e; }
+        return reply('好的，开始执行。');
       }
       if (run.pendingAction?.type === 'input' && !command.command) {
         const p = run.pendingAction;
@@ -351,17 +378,17 @@ export class Connection {
         }
         if (!answers) return reply(inputText(p));
         await this.api(`/v1/agent/runs/${encId(s.run.id)}/user-input`, { toolCallId: p.toolCallId, answers }, undefined, epoch);
-        this.patch({ inbound: null }, epoch); return reply('已收到补充信息。');
+        this.patch({ inbound: null }, epoch); return reply('收到，继续处理中。');
       }
-      return reply('当前任务进行中，请等待完成或发送 /cancel；暂不排队处理新消息。');
+      return reply('上一个任务还在进行，请等它完成，或发送 /cancel 取消。');
     }
     const images = items.filter(i => i.type === 2);
     if (images.length > 4) return reply('一次最多发送 4 张参考图。');
     const refs = await this.references(images, key, epoch, s.refs.filter(r => r.until > Date.now()));
     if (refs.length > 4) return reply('最多保留 4 张参考图，请先发送 /new 清空。');
     if (!command.text) {
-      if (images.length) { this.mark(key, epoch, { refs, inbound: null }); await this.send('参考图已收到，请在 30 分钟内发送要求。', epoch, key); return; }
-      return reply(command.command === 'image' ? '用法：/image 图片描述' : '请发送文字或图片。');
+      if (images.length) { this.mark(key, epoch, { refs, inbound: null }); await this.send('收到参考图，请在 30 分钟内发送具体要求。', epoch, key); return; }
+      return reply(command.command === 'image' ? '请在 /image 后面写上图片描述，例如：/image 一只橘猫在窗台晒太阳' : '请发送文字或图片。');
     }
     if (command.text.length > 16000) return reply('消息过长，请缩短至 16000 字以内。');
     if (!s.thread) {
@@ -376,7 +403,7 @@ export class Connection {
       refs: refs.map(r => ({ type: 'resource', id: r.id })), idempotencyKey: 'wx:' + key
     }, undefined, epoch);
     this.mark(key, epoch, { refs: [], inbound: null, run: { id: run.runId, sent: 0, noticeHash: null } });
-    await this.send('已收到，正在处理。', epoch, key);
+    await this.send('收到，正在处理…', epoch, key);
   }
   async references(images, key, epoch, existing) {
     let staged = this.read().inbound;
