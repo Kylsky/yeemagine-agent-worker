@@ -2,7 +2,14 @@ import { request, jsonBody, Fault, bytes } from './http.js';
 export class Platform {
   constructor(env, fetcher = fetch) { this.env = env; this.fetcher = fetcher; }
   async raw(path, init = {}) {
-    return request(new URL(path, this.env.PLATFORM_BASE_URL), init, 20000, this.fetcher);
+    try { return await request(new URL(path, this.env.PLATFORM_BASE_URL), init, 20000, this.fetcher); }
+    catch (e) {
+      if (e instanceof Fault && e.code.startsWith('NETWORK_')) {
+        const stage = path === '/oauth/token' ? 'TOKEN' : path === '/oauth/me' ? 'IDENTITY' : 'API';
+        throw new Fault(`PLATFORM_${stage}_${e.code}`, e.status);
+      }
+      throw e;
+    }
   }
   async decode(res) {
     const data = await jsonBody(res);

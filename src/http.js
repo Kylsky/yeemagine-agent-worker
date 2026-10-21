@@ -41,7 +41,18 @@ export async function jsonBody(response, max = 2 * 1024 * 1024) {
 }
 export async function request(url, init = {}, timeout = 20000, fetcher = fetch) {
   try { return await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeout) }); }
-  catch { throw new Fault('NETWORK_ERROR', 502); }
+  catch (e) {
+    // 只返回固定分类，不暴露异常中的 URL、凭证或响应正文。
+    const reason = `${e?.name || ''} ${e?.message || ''} ${e?.cause?.code || ''} ${e?.cause?.message || ''}`;
+    const code = /timeout|timed out|abort/i.test(reason) ? 'NETWORK_TIMEOUT'
+      : /certificate|cert_|tls|ssl/i.test(reason) ? 'NETWORK_TLS_ERROR'
+      : /dns|enotfound|eai_again|resolve.*host/i.test(reason) ? 'NETWORK_DNS_ERROR'
+      : /redirect/i.test(reason) ? 'NETWORK_REDIRECT_ERROR'
+      : /refused|econnrefused/i.test(reason) ? 'NETWORK_CONNECTION_REFUSED'
+      : /connection.*(?:lost|reset|closed)|econnreset|socket/i.test(reason) ? 'NETWORK_CONNECTION_LOST'
+      : 'NETWORK_ERROR';
+    throw new Fault(code, 502);
+  }
 }
 export const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers });
 export function safeCode(e) { return e instanceof Fault && /^[A-Za-z0-9_-]{1,80}$/.test(e.code) ? e.code : 'INTERNAL_ERROR'; }
