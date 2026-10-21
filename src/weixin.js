@@ -40,7 +40,18 @@ export class Weixin {
       body: JSON.stringify({ ...body, base_info: { channel_version: '2.4.10', bot_agent: 'YeeMagineWorker/0.1.0' } })
     }, timeout, this.fetcher);
     if (!res.ok) { await res.body?.cancel(); throw new Fault('WEIXIN_HTTP_' + res.status); }
-    const data = await jsonBody(res);
+    // 微信消息 ID 可能是 uint64；使用原始数字文本，不能先转 Number 再转字符串。
+    let data;
+    try {
+      data = JSON.parse(new TextDecoder().decode(await bytes(res, 2 * 1024 * 1024)), (key, value, context) => {
+        if (['message_id', 'msg_id', 'svr_id'].includes(key) && typeof value === 'number') {
+          if (context?.source && /^\d+$/.test(context.source)) return context.source;
+          if (!Number.isSafeInteger(value)) throw new Fault('INVALID_WEIXIN_MESSAGE_ID');
+          return String(value);
+        }
+        return value;
+      });
+    } catch (e) { if (e instanceof Fault) throw e; throw new Fault('INVALID_JSON', 400); }
     if (data.ret === -14 || data.errcode === -14) throw new Fault('WEIXIN_COOLDOWN');
     if ((data.ret != null && data.ret !== 0) || (data.errcode != null && data.errcode !== 0)) throw new Fault('WEIXIN_API_ERROR');
     return data;
@@ -62,7 +73,14 @@ export class Weixin {
     if (!res.ok) throw new Fault('WEIXIN_QR_FAILED');
     return jsonBody(res);
   }
-  updates(bot, cursor) { return this.call(bot, 'getupdates', { get_updates_buf: cursor || '' }, 40000); }
+  async updates(bot, cursor) {
+    try { return await this.call(bot, 'getupdates', { get_updates_buf: cursor || '' }, 40000); }
+    catch (e) {
+      // 长轮询没有新消息时超时是正常状态，不触发指数退避。
+      if (e.code === 'NETWORK_TIMEOUT') return { msgs: [], get_updates_buf: cursor || '' };
+      throw e;
+    }
+  }
   send(bot, route, item, id) {
     return this.call(bot, 'sendmessage', { msg: { from_user_id: '', to_user_id: route.toUserId, context_token: route.contextToken,
       client_id: id, message_type: 2, message_state: 2, item_list: [item] } });

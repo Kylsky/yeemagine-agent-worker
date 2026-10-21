@@ -264,7 +264,7 @@ export class Connection {
   }
   async message(msg, epoch) {
     this.guard(epoch);
-    if (msg.group_id || msg.message_type !== 1 || msg.message_state !== 2 || !msg.from_user_id || !msg.context_token) return;
+    if (msg.group_id || msg.message_type !== 1 || (msg.message_state != null && ![0, 2].includes(msg.message_state)) || !msg.from_user_id || !msg.context_token) return;
     if (!equal(this.hash(msg.from_user_id), this.read().ownerHash)) return;
     if (!msg.message_id || (typeof msg.message_id === 'number' && !Number.isSafeInteger(msg.message_id))) return;
     const key = this.hash('message:' + msg.from_user_id + ':' + msg.message_id);

@@ -276,3 +276,25 @@ test('login rejects missing, null and foreign origins without creating a transac
   assert.match(response.headers.get('Set-Cookie'), /HttpOnly/);
   assert.equal(new URL((await response.json()).authorizationUrl).origin, env.PLATFORM_BASE_URL);
 });
+
+test('WeChat uint64 IDs survive parsing and new inbound messages reply exactly once', async () => {
+  const {c,sent} = fixture();
+  const wx = new Weixin(async () => new Response('{"ret":0,"msgs":[{"message_id":18446744073709551614,"message_type":1,"message_state":0,"from_user_id":"owner","context_token":"context","item_list":[{"type":1,"text_item":{"text":"/help"}}]},{"message_id":18446744073709551615,"message_type":1,"from_user_id":"owner","context_token":"context","item_list":[{"type":1,"text_item":{"text":"/status"}}]}]}'));
+  const batch = await wx.updates({baseurl:'https://ilinkai.weixin.qq.com',bot_token:'token'},'');
+  assert.equal(batch.msgs[0].message_id,'18446744073709551614');
+  assert.equal(batch.msgs[1].message_id,'18446744073709551615');
+  for (const msg of batch.msgs) await c.message(msg,c.read().epoch);
+  assert.ok(sent.length >= 2);
+  const count = sent.length;
+  for (const msg of batch.msgs) await c.message(msg,c.read().epoch);
+  await c.message({...batch.msgs[0],message_id:'3',message_state:1},c.read().epoch);
+  await c.message({...batch.msgs[0],message_id:'4',message_type:2},c.read().epoch);
+  assert.equal(sent.length,count);
+});
+test('idle WeChat polling timeouts preserve cursor but real network failures propagate', async () => {
+  const bot={baseurl:'https://ilinkai.weixin.qq.com',bot_token:'token'};
+  const wx=new Weixin(async()=>{throw new DOMException('timed out','TimeoutError');});
+  assert.deepEqual(await wx.updates(bot,'cursor'),{msgs:[],get_updates_buf:'cursor'});
+  wx.fetcher=async()=>{throw new Error('DNS lookup failed');};
+  await assert.rejects(wx.updates(bot,'cursor'),{code:'NETWORK_DNS_ERROR'});
+});
