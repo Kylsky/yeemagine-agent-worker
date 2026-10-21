@@ -37,13 +37,13 @@
 
 ### 3. 只填写 4 项平台配置
 
-在 Cloudflare「Workers & Pages → 当前 Worker → 设置 → 变量和机密」中填写，保存部署后生效。
+按「平台地址 → 用户 ID → Client ID → Client Secret」准备以下配置。Cloudflare 官方向导会把 Secret 单独放在普通变量前面；这是向导自身的分组，不影响配置含义。也可在「Workers & Pages → 当前 Worker → 设置 → 变量和机密」中填写，保存部署后生效。
 
 | 名称 | 类型 | 内容 |
 |---|---|---|
 | `PLATFORM_BASE_URL` | 文本 | 公网可访问的平台 HTTPS 根地址，不能填 localhost 或包含路径、查询参数 |
-| `OAUTH_CLIENT_ID` | 文本 | 个人应用 Client ID |
 | `PLATFORM_USER_ID` | 文本 | 复制平台应用显示的 userId，不是邮箱或昵称 |
+| `OAUTH_CLIENT_ID` | 文本 | 个人应用 Client ID |
 | `OAUTH_CLIENT_SECRET` | Secret | 应用 Client Secret |
 
 无需填写 Worker 地址或手工生成加密密钥：

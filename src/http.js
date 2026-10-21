@@ -12,7 +12,7 @@ export function config(env) {
   const missing = [];
   if (!origin(env.PLATFORM_BASE_URL)) missing.push('PLATFORM_BASE_URL');
   if (env.PUBLIC_BASE_URL && !origin(env.PUBLIC_BASE_URL)) missing.push('PUBLIC_BASE_URL');
-  for (const name of ['OAUTH_CLIENT_ID', 'PLATFORM_USER_ID', 'OAUTH_CLIENT_SECRET']) if (!env[name]?.trim()) missing.push(name);
+  for (const name of ['PLATFORM_USER_ID', 'OAUTH_CLIENT_ID', 'OAUTH_CLIENT_SECRET']) if (!env[name]?.trim()) missing.push(name);
   if (env.CREDENTIAL_ENCRYPTION_KEY && !/^[a-f\d]{64}$/i.test(env.CREDENTIAL_ENCRYPTION_KEY)) missing.push('CREDENTIAL_ENCRYPTION_KEY');
   return missing;
 }

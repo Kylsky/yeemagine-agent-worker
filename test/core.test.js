@@ -255,6 +255,6 @@ test('unconfigured status shows registration address without key material', asyn
   const c = new Connection(repo,{});
   const response=await c.handle(new Request('https://my-agent.account.workers.dev/api/status'));
   const data=await response.json();assert.equal(data.workerUrl,'https://my-agent.account.workers.dev');
-  assert.deepEqual(data.missing,['PLATFORM_BASE_URL','OAUTH_CLIENT_ID','PLATFORM_USER_ID','OAUTH_CLIENT_SECRET']);
+  assert.deepEqual(data.missing,['PLATFORM_BASE_URL','PLATFORM_USER_ID','OAUTH_CLIENT_ID','OAUTH_CLIENT_SECRET']);
   assert.ok(!JSON.stringify(data).includes('2'.repeat(64)));
 });

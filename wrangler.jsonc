@@ -14,7 +14,7 @@
   "triggers": { "crons": ["*/10 * * * *"] },
   "vars": {
     "PLATFORM_BASE_URL": "",
-    "OAUTH_CLIENT_ID": "",
-    "PLATFORM_USER_ID": ""
+    "PLATFORM_USER_ID": "",
+    "OAUTH_CLIENT_ID": ""
   }
 }
