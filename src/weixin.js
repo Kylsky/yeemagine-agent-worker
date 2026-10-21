@@ -16,11 +16,12 @@ export function aesKey(value) {
   throw new Fault('INVALID_MEDIA_KEY');
 }
 export function encryptMedia(data, key) {
-  const cipher = createCipheriv('aes-128-ecb', key, null);
+  // ECB 不使用 IV；workerd 的 Node 兼容层拒绝 null，使用零长度 Buffer。
+  const cipher = createCipheriv('aes-128-ecb', key, Buffer.alloc(0));
   return Buffer.concat([cipher.update(data), cipher.final()]);
 }
 export function decryptMedia(data, key) {
-  const cipher = createDecipheriv('aes-128-ecb', key, null);
+  const cipher = createDecipheriv('aes-128-ecb', key, Buffer.alloc(0));
   try { return Buffer.concat([cipher.update(data), cipher.final()]); }
   catch { throw new Fault('INVALID_MEDIA'); }
 }
