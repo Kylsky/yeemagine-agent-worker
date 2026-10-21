@@ -298,3 +298,16 @@ test('idle WeChat polling timeouts preserve cursor but real network failures pro
   wx.fetcher=async()=>{throw new Error('DNS lookup failed');};
   await assert.rejects(wx.updates(bot,'cursor'),{code:'NETWORK_DNS_ERROR'});
 });
+
+test('authenticated connected status repairs a missing alarm without moving an existing one', async () => {
+  const {c,repo}=fixture();
+  c.patch({sessionHash:c.hash('browser'),sessionUntil:Date.now()+60000});
+  const req=new Request(env.PUBLIC_BASE_URL+'/api/status',{headers:{Cookie:'__Host-session=browser'}});
+  await c.handle(new Request(env.PUBLIC_BASE_URL+'/api/status'));
+  assert.equal(repo.at,undefined);
+  await c.handle(req);
+  assert.ok(repo.at >= Date.now());
+  const alarm=repo.at;
+  await c.handle(req);
+  assert.equal(repo.at,alarm);
+});

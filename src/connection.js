@@ -86,6 +86,8 @@ export class Connection {
     const session = this.session(req);
     if (path === '/api/status' && req.method === 'GET') {
       const s = this.read();
+      // 部署或运行中断后恢复丢失的轮询；正在执行的轮询自行安排下一次。
+      if (session && s.oauth && s.bot && !this.busy) await this.wake();
       return json(session ? { configured: true, loggedIn: true, connected: !!s.bot, running: !!s.run, model: s.model || null,
         diagnostics: s.diagnostics || {}, nextPollAt: await this.repo.getAlarm(), error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
     }
