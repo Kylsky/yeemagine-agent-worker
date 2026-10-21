@@ -40,8 +40,17 @@ export async function jsonBody(response, max = 2 * 1024 * 1024) {
   catch (e) { if (e instanceof Fault) throw e; throw new Fault('INVALID_JSON', 400); }
 }
 export async function request(url, init = {}, timeout = 20000, fetcher = fetch) {
-  try { return await fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeout) }); }
+  try {
+    // workerd 不支持 redirect: 'error'；手动接收并拒绝跳转，避免转发凭证。
+    const response = await fetcher(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeout) });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      await response.body?.cancel();
+      throw new Fault('NETWORK_REDIRECT_ERROR', 502);
+    }
+    return response;
+  }
   catch (e) {
+    if (e instanceof Fault) throw e;
     // 只返回固定分类，不暴露异常中的 URL、凭证或响应正文。
     const reason = `${e?.name || ''} ${e?.message || ''} ${e?.cause?.code || ''} ${e?.cause?.message || ''}`;
     const code = /timeout|timed out|abort/i.test(reason) ? 'NETWORK_TIMEOUT'

@@ -65,7 +65,7 @@ test('WeChat QR polling never sends bearer or UIN headers', async () => {
   await wx.scan({baseurl:'https://ilinkai.weixin.qq.com',qrcode:'private-qr'}, '123456');
   assert.equal(seen.init.headers.Authorization, undefined);
   assert.equal(seen.init.headers['X-WECHAT-UIN'], undefined);
-  assert.equal(seen.init.redirect, 'error');
+  assert.equal(seen.init.redirect, 'manual');
 });
 test('same-origin CSRF rejects cross-site mutation and missing session', async () => {
   const {c} = fixture();
