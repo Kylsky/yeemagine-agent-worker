@@ -17,6 +17,11 @@ async function refresh() {
   $('address').textContent = state.workerUrl ? `应用地址：${state.workerUrl}（可直接登记到平台，无需自定义域名）` : '';
   $('login').hidden = !state.configured || state.loggedIn;
   $('controls').hidden = !state.loggedIn;
+  $('diagnostics').hidden = !state.loggedIn;
+  const d = state.diagnostics || {};
+  const time = value => value ? new Date(value).toLocaleTimeString() : '尚无';
+  $('diagnostics').textContent = `接收诊断：轮询启动 ${time(d.alarmAt)}；最近返回 ${time(d.pollAt)}（${d.batchSize ?? 0} 条）；下次 ${time(state.nextPollAt)}；最近消息 ${time(d.inboundAt)} / ${d.result || '尚无'}（类型 ${d.messageType ?? '未提供'}，状态 ${d.messageState ?? '未提供'}）。`;
+
   if (!state.configured) {
     $('message').textContent = '部署已完成，等待填写平台配置。';
     $('missing').replaceChildren(...state.missing.map(name => { const li = document.createElement('li'); li.textContent = name; return li; })); return;

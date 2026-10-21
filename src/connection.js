@@ -87,7 +87,7 @@ export class Connection {
     if (path === '/api/status' && req.method === 'GET') {
       const s = this.read();
       return json(session ? { configured: true, loggedIn: true, connected: !!s.bot, running: !!s.run, model: s.model || null,
-        error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
+        diagnostics: s.diagnostics || {}, nextPollAt: await this.repo.getAlarm(), error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
     }
     if (req.method === 'POST') {
       if (req.headers.get('Origin') !== publicOrigin) throw new Fault('INVALID_ORIGIN', 403);
@@ -201,6 +201,7 @@ export class Connection {
     // A backup survives eviction/failure; cron restores an absent alarm.
     try {
       await this.repo.alarm(Date.now() + 60000);
+      this.patch({ diagnostics: { ...this.read().diagnostics, alarmAt: Date.now() } }, epoch);
       this.cleanup(epoch);
       let s = this.read();
       if (!s.oauth) { delay = s.transaction || s.scan ? minute : 0; return; }
@@ -215,6 +216,7 @@ export class Connection {
       s = this.read();
       const bot = this.open(s.bot, 'bot');
       const batch = await this.wx.updates(bot, s.cursor); this.guard(epoch);
+      this.patch({ diagnostics: { ...this.read().diagnostics, pollAt: Date.now(), batchSize: (batch.msgs || []).length } }, epoch);
       const deadline = Date.now() + 20000;
       let complete = true;
       for (const msg of batch.msgs || []) {
@@ -264,11 +266,18 @@ export class Connection {
   }
   async message(msg, epoch) {
     this.guard(epoch);
-    if (msg.group_id || msg.message_type !== 1 || (msg.message_state != null && ![0, 2].includes(msg.message_state)) || !msg.from_user_id || !msg.context_token) return;
-    if (!equal(this.hash(msg.from_user_id), this.read().ownerHash)) return;
-    if (!msg.message_id || (typeof msg.message_id === 'number' && !Number.isSafeInteger(msg.message_id))) return;
+    const rejected = reason => this.patch({ diagnostics: { ...this.read().diagnostics, inboundAt: Date.now(), result: reason,
+      messageType: typeof msg.message_type === 'number' ? msg.message_type : null,
+      messageState: typeof msg.message_state === 'number' ? msg.message_state : null } }, epoch);
+    if (msg.group_id) return rejected('GROUP');
+    if (msg.message_type !== 1) return rejected('MESSAGE_TYPE');
+    if (msg.message_state != null && ![0, 2].includes(msg.message_state)) return rejected('MESSAGE_STATE');
+    if (!msg.from_user_id || !msg.context_token) return rejected('MISSING_SENDER_OR_CONTEXT');
+    if (!equal(this.hash(msg.from_user_id), this.read().ownerHash)) return rejected('OWNER_MISMATCH');
+    if (!msg.message_id || (typeof msg.message_id === 'number' && !Number.isSafeInteger(msg.message_id))) return rejected('INVALID_MESSAGE_ID');
     const key = this.hash('message:' + msg.from_user_id + ':' + msg.message_id);
-    if (this.read().seen.some(x => x.key === key)) return;
+    if (this.read().seen.some(x => x.key === key)) return rejected('DUPLICATE');
+    rejected('ACCEPTED');
     this.patch({ route: this.box({ toUserId: msg.from_user_id, contextToken: msg.context_token }, 'route') }, epoch);
     const items = msg.item_list || [];
     const raw = items.filter(i => i.type === 1).map(i => i.text_item?.text || '').join('\n');
