@@ -75,7 +75,7 @@ test('same-origin CSRF rejects cross-site mutation and missing session', async (
 test('OAuth transaction binds browser, consumes once, uses PKCE and validates owner', async () => {
   const {c} = fixture();
   const login = await c.login();
-  const location = new URL(login.headers.get('location'));
+  const location = new URL((await login.json()).authorizationUrl);
   assert.equal(location.searchParams.get('code_challenge_method'), 'S256');
   const txCookie = login.headers.get('set-cookie').split(';')[0];
   const url = new URL(env.PUBLIC_BASE_URL+'/auth/callback');
@@ -230,7 +230,7 @@ test('request origin supplies workers.dev callback; forwarding headers cannot ch
   const c = new Connection(repo,minimal);
   const root='https://my-agent.account.workers.dev';
   const response = await c.handle(new Request(root+'/auth/login',{method:'POST',headers:{Origin:root,'X-Forwarded-Host':'evil.example',Forwarded:'host=evil.example'}}));
-  const authUrl = new URL(response.headers.get('Location'));
+  const authUrl = new URL((await response.json()).authorizationUrl);
   assert.equal(authUrl.searchParams.get('redirect_uri'),root+'/auth/callback');
   const callback = new URL(root+'/auth/callback?code=code&state='+authUrl.searchParams.get('state'));
   const headers={Cookie:response.headers.get('set-cookie').split(';')[0]};
@@ -257,4 +257,22 @@ test('unconfigured status shows registration address without key material', asyn
   const data=await response.json();assert.equal(data.workerUrl,'https://my-agent.account.workers.dev');
   assert.deepEqual(data.missing,['PLATFORM_BASE_URL','PLATFORM_USER_ID','OAUTH_CLIENT_ID','OAUTH_CLIENT_SECRET']);
   assert.ok(!JSON.stringify(data).includes('2'.repeat(64)));
+});
+
+test('login rejects missing, null and foreign origins without creating a transaction', async () => {
+  for (const source of [undefined, 'null', 'https://evil.example']) {
+    const {c} = fixture();
+    await assert.rejects(c.handle(new Request(env.PUBLIC_BASE_URL+'/auth/login', {
+      method:'POST', headers:source === undefined ? {} : {Origin:source}
+    })), {code:'INVALID_ORIGIN'});
+    assert.equal(c.read().transaction, undefined);
+  }
+  const {c} = fixture();
+  const response = await c.handle(new Request(env.PUBLIC_BASE_URL+'/auth/login', {
+    method:'POST', headers:{Origin:env.PUBLIC_BASE_URL}
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Location'), null);
+  assert.match(response.headers.get('Set-Cookie'), /HttpOnly/);
+  assert.equal(new URL((await response.json()).authorizationUrl).origin, env.PLATFORM_BASE_URL);
 });

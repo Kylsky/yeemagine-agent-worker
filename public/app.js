@@ -40,6 +40,17 @@ async function scan(myGeneration, code) {
     setTimeout(() => { if (myGeneration === generation) scan(myGeneration); }, 1500);
   } catch (e) { if (myGeneration === generation) showError(e); }
 }
+// 原生表单在 no-referrer 下会提交 Origin: null；fetch 保留同源 Origin。
+$('login').onsubmit = async event => {
+  event.preventDefault();
+  const button = $('login').querySelector('button');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const data = await api('/auth/login', {});
+    window.location.assign(data.authorizationUrl);
+  } catch (e) { showError(e); button.disabled = false; }
+};
 $('qr-button').onclick = async () => {
   $('qr-button').disabled = true; clearQr();
   try { const data = await api('/api/qr', {}); qrUrl = URL.createObjectURL(new Blob([data.svg], { type:'image/svg+xml' })); $('qr').src = qrUrl; $('qr-area').hidden = false; scan(generation); }

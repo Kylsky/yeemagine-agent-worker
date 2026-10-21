@@ -157,7 +157,8 @@ export class Connection {
     url.search = new URLSearchParams({ response_type: 'code', client_id: this.env.OAUTH_CLIENT_ID,
       redirect_uri: new URL('/auth/callback', publicOrigin).href, scope: 'agent', state,
       code_challenge: sha256(verifier), code_challenge_method: 'S256' });
-    return new Response(null, { status: 303, headers: { Location: url.href, 'Set-Cookie': cookie('transaction', browser, 600) } });
+    // 通过 JSON 返回授权地址，避免 fetch 跟随跨域重定向。
+    return Response.json({ authorizationUrl: url.href }, { headers: { 'Set-Cookie': cookie('transaction', browser, 600) } });
   }
   async callback(req, url) {
     const s = this.read();
