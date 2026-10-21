@@ -78,13 +78,15 @@ test('insufficient credit is answered in WeChat instead of retrying forever', as
 test('quotes, questions and balance read as plain Chinese without raw JSON', () => {
   const quote = confirmationText({ confirmations:[{ request:{ mediaKind:'image', prompt:'一只猫', modelKey:'gpt-image', params:{ size:'1024x1024', seed:3 }, imageCount:2 },
     credit:{ estimatedCost:12.5, quantity:2 }, expiresAt:new Date(Date.now() + 10 * 60000).toISOString() }] });
-  assert.match(quote, /图片生成 × 2 张/); assert.match(quote, /尺寸 1024x1024/); assert.match(quote, /费用：12\.5 积分/); assert.match(quote, /10 分钟内有效/);
+  assert.match(quote, /^\*\*请确认以下方案\*\*/); assert.match(quote, /\*\*图片生成 × 2 张\*\*/); assert.match(quote, /- 模型：`gpt-image`/);
+  assert.match(quote, /- 参数：尺寸 1024x1024/); assert.match(quote, /- 费用：\*\*12\.5 积分\*\*/); assert.match(quote, /10 分钟内有效/);
   assert.doesNotMatch(quote, /seed|[{}]/);
   const question = { id:'layout', title:'选择版式', kind:'select', options:['竖版', '横版'] };
-  assert.match(inputText({ questions:[question] }), /1）竖版\n2）横版/);
+  assert.match(inputText({ questions:[question] }), /\*\*选择版式\*\*\n1\. 竖版\n2\. 横版/);
+  assert.match(inputText({ questions:[question, { id:'ref', title:'参考图', kind:'resource' }] }), /\*\*1\. 选择版式\*\*\n可选：`1` 竖版 · `2` 横版[\s\S]*\*\*2\. 参考图\*\*\n请发送一张图片/);
   assert.deepEqual(answersFor([question], '2'), { layout:'横版' });
   assert.deepEqual(answersFor([question], '做成方形'), { layout:'做成方形' });
-  assert.equal(balanceText({ balance:12.5, expiring:{ amount:3, daysUntil:5 } }), '当前积分：12.5\n其中 3 积分将在 5 天内到期');
-  assert.equal(balanceText({ balance:0, expiring:null }), '当前积分：0');
+  assert.equal(balanceText({ balance:12.5, expiring:{ amount:3, daysUntil:5 } }), '**当前积分：12.5**\n其中 3 积分将在 5 天内到期');
+  assert.equal(balanceText({ balance:0, expiring:null }), '**当前积分：0**');
   assert.match(failureText('SOMETHING_NEW'), /SOMETHING_NEW/);
 });

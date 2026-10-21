@@ -4,6 +4,7 @@ import { config, origin, json, jsonBody, Fault, safeCode } from './http.js';
 import { Platform } from './platform.js';
 import { Weixin, API, weixinUrl } from './weixin.js';
 import { empty } from './state.js';
+import { toWeixinMarkdown } from './markdown.js';
 import { HELP, parse, chunks, confirmationText, inputText, answersFor, balanceText, failureText, GAVE_UP, undeliverable, imageUnsendable } from './commands.js';
 
 const minute = 60000;
@@ -396,8 +397,8 @@ export class Connection {
     if (command.command && items.some(i => i.ref_msg)) return reply('引用消息中的命令不执行，请单独发送命令。');
     let s = this.read();
     if (command.command === 'help') return reply(HELP);
-    if (command.command === 'unknown') return reply('没有这个命令，发送 /help 查看全部命令。\n如果想发以斜杠开头的普通文字，请用 // 开头。');
-    if (command.command === 'status') return reply(`微信已连接\n当前任务：${s.run ? '进行中' : '无'}\n对话模型：${s.model || '平台默认'}`);
+    if (command.command === 'unknown') return reply('没有这个命令，发送 `/help` 查看全部命令。\n想发以斜杠开头的普通文字，请用 `//` 开头。');
+    if (command.command === 'status') return reply(`**微信已连接**\n- 当前任务：${s.run ? '进行中' : '无'}\n- 对话模型：${s.model ? `\`${s.model}\`` : '平台默认'}`);
     if (command.command === 'balance') {
       const data = await this.api('/v1/account/balance', undefined, undefined, epoch);
       return reply(balanceText(data));
@@ -406,11 +407,11 @@ export class Connection {
       const data = await this.api('/v1/agent/models', undefined, undefined, epoch);
       if (command.text && command.command === 'model') {
         if (s.run) return reply('当前任务完成后才能切换模型。');
-        if (!/^\d+$/.test(command.text) || !data.models[Number(command.text) - 1]) return reply('模型序号无效，请发送 /models 查看。');
+        if (!/^\d+$/.test(command.text) || !data.models[Number(command.text) - 1]) return reply('模型序号无效，请发送 `/model` 查看。');
         const model = data.models[Number(command.text) - 1];
-        this.patch({ model: model.id }, epoch); return reply('已切换到：' + model.label);
+        this.patch({ model: model.id }, epoch); return reply(`已切换到 **${model.label}**`);
       }
-      return reply('可用模型：\n' + data.models.map((m, i) => `${i + 1}. ${m.label}${m.id === s.model ? '（当前）' : ''}`).join('\n') + '\n\n发送「/model 序号」切换。');
+      return reply('**可用模型**\n' + data.models.map((m, i) => `${i + 1}. ${m.id === s.model ? `**${m.label}**（当前）` : m.label}`).join('\n') + '\n\n发送 `/model 序号` 切换');
     }
     if (command.command === 'cancel' || (!command.command && command.text === '取消' && s.run)) {
       if (!s.run) return reply('当前没有任务。');
@@ -468,7 +469,7 @@ export class Connection {
     if (refs.length > 4) return reply('最多保留 4 张参考图，请先发送 /new 清空。');
     if (!command.text) {
       if (images.length) { this.mark(key, epoch, { refs, inbound: null }); await this.sendQuietly('收到参考图，请在 30 分钟内发送具体要求。', epoch, key); return; }
-      return reply(command.command === 'image' ? '请在 /image 后面写上图片描述，例如：/image 一只橘猫在窗台晒太阳' : '请发送文字或图片。');
+      return reply(command.command === 'image' ? '请在 `/image` 后面写上图片描述，例如：`/image 一只橘猫在窗台晒太阳`' : '请发送文字或图片。');
     }
     if (command.text.length > 16000) return reply('消息过长，请缩短至 16000 字以内。');
     if (!s.thread) {
@@ -536,7 +537,8 @@ export class Connection {
       return;
     }
     if (!terminal.has(run.status)) return;
-    const parts = chunks(run.finalText || (run.status === 'cancelled' ? '任务已取消。' : run.status === 'failed' ? '任务失败，请在平台查看详情。' : '任务完成。'));
+    // 平台回答本身是 Markdown，先按微信支持的写法清理，再按段落分段，避免把代码块或列表从中间切断。
+    const parts = chunks(toWeixinMarkdown(run.finalText) || (run.status === 'cancelled' ? '任务已取消。' : run.status === 'failed' ? '任务失败，请在平台查看详情。' : '任务完成。'));
     const artifacts = run.artifacts || [];
     const bot = this.open(s.bot, 'bot'), route = this.open(s.route, 'route');
     for (let i = s.run.sent; i < Math.min(parts.length + artifacts.length, s.run.sent + 4); i++) {
