@@ -13,6 +13,8 @@ function clearQr() { generation++; $('qr-area').hidden = true; $('verify').hidde
 async function refresh() {
   const state = await api('/api/status');
   $('setup').hidden = state.configured;
+  $('address').hidden = !state.workerUrl;
+  $('address').textContent = state.workerUrl ? `应用地址：${state.workerUrl}（可直接登记到平台，无需自定义域名）` : '';
   $('login').hidden = !state.configured || state.loggedIn;
   $('controls').hidden = !state.loggedIn;
   if (!state.configured) {

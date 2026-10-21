@@ -13,7 +13,7 @@ Cron 每 10 分钟 ── 缺失 alarm 时补建 ──────────�
 
 - `index.js`：Worker 路由、安全响应头、DO 包装与 Cron。
 - `connection.js`：认证、扫码、消息、命令、报价确认、回复进度、生命周期。
-- `state.js`：SQLite 状态；同步 SQL 写入，不跨网络事务。
+- `state.js`：SQLite 状态与自动生成的持久实例密钥；同步 SQL 写入，不跨网络事务。
 - `platform.js`：固定 origin 的 OAuth / Agent 请求、限长响应。
 - `weixin.js`：iLink 请求、二维码、媒体协议。只向微信 API 发送 bot token。
 - `crypto.js`：随机数、HMAC、PKCE、AES-GCM。

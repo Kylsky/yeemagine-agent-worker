@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { random, sha256, digest, equal, seal, unseal } from './crypto.js';
-import { config, json, jsonBody, Fault, safeCode } from './http.js';
+import { config, origin, json, jsonBody, Fault, safeCode } from './http.js';
 import { Platform } from './platform.js';
 import { Weixin, API, weixinUrl } from './weixin.js';
 import { empty } from './state.js';
@@ -24,11 +24,12 @@ export class Connection {
     Object.assign(state, values); this.repo.write(state); return state;
   }
   guard(epoch) { if (this.read().epoch !== epoch) throw new Fault('CONNECTION_CHANGED', 409); }
-  box(value, purpose) { return seal(this.env.CREDENTIAL_ENCRYPTION_KEY, value, purpose); }
-  open(value, purpose) { return unseal(this.env.CREDENTIAL_ENCRYPTION_KEY, value, purpose); }
-  hash(value) { return digest(this.env.CREDENTIAL_ENCRYPTION_KEY, String(value)); }
+  key() { return this.env.CREDENTIAL_ENCRYPTION_KEY || this.repo.encryptionKey(); }
+  box(value, purpose) { return seal(this.key(), value, purpose); }
+  open(value, purpose) { return unseal(this.key(), value, purpose); }
+  hash(value) { return digest(this.key(), String(value)); }
   reset(error) { this.repo.write({ ...empty(this.read().epoch + 1), fingerprint: this.fingerprint(), error }); }
-  fingerprint() { return sha256(JSON.stringify([this.env.PLATFORM_BASE_URL, this.env.PUBLIC_BASE_URL, this.env.OAUTH_CLIENT_ID, this.env.PLATFORM_USER_ID, this.env.CREDENTIAL_ENCRYPTION_KEY])); }
+  fingerprint() { return sha256(JSON.stringify([this.env.PLATFORM_BASE_URL, this.env.PUBLIC_BASE_URL, this.env.OAUTH_CLIENT_ID, this.env.PLATFORM_USER_ID, this.key()])); }
   initialize() {
     const missing = config(this.env);
     if (missing.length) return missing;
@@ -37,7 +38,7 @@ export class Connection {
   }
   session(req) {
     const s = this.read(), value = getCookie(req, 'session');
-    return value && s.sessionUntil > Date.now() && equal(this.hash(value), s.sessionHash) ? value : null;
+    return (!s.sessionOrigin || s.sessionOrigin === new URL(req.url).origin) && value && s.sessionUntil > Date.now() && equal(this.hash(value), s.sessionHash) ? value : null;
   }
   csrf(session) { return this.hash('csrf:' + session); }
   identity(me) {
@@ -77,21 +78,22 @@ export class Connection {
   }
   async handle(req) {
     const url = new URL(req.url), path = url.pathname;
+    const publicOrigin = origin(url.origin);
+    if (!publicOrigin || (this.env.PUBLIC_BASE_URL && publicOrigin !== origin(this.env.PUBLIC_BASE_URL))) throw new Fault('WRONG_ORIGIN', 403);
     const missing = this.initialize();
-    if (path === '/api/status' && missing.length) return json({ configured: false, missing });
+    if (path === '/api/status' && missing.length) return json({ configured: false, missing, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
     if (missing.length) throw new Fault('CONFIGURATION_REQUIRED', 503);
-    if (url.origin !== new URL(this.env.PUBLIC_BASE_URL).origin) throw new Fault('WRONG_ORIGIN', 403);
     const session = this.session(req);
     if (path === '/api/status' && req.method === 'GET') {
       const s = this.read();
       return json(session ? { configured: true, loggedIn: true, connected: !!s.bot, running: !!s.run, model: s.model || null,
-        error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false });
+        error: s.error || null, cooldownUntil: s.cooldownUntil || null, csrf: this.csrf(session) } : { configured: true, loggedIn: false, workerUrl: publicOrigin, callbackUrl: publicOrigin + '/auth/callback' });
     }
     if (req.method === 'POST') {
-      if (req.headers.get('Origin') !== new URL(this.env.PUBLIC_BASE_URL).origin) throw new Fault('INVALID_ORIGIN', 403);
+      if (req.headers.get('Origin') !== publicOrigin) throw new Fault('INVALID_ORIGIN', 403);
       if (path !== '/auth/login' && (!session || !equal(req.headers.get('X-CSRF-Token'), this.csrf(session)))) throw new Fault('LOGIN_REQUIRED', 401);
     }
-    if (path === '/auth/login' && req.method === 'POST') return this.login();
+    if (path === '/auth/login' && req.method === 'POST') return this.login(publicOrigin);
     if (path === '/auth/callback' && req.method === 'GET') return this.callback(req, url);
     if (!session) throw new Fault('LOGIN_REQUIRED', 401);
     if (req.method !== 'POST') throw new Fault('NOT_FOUND', 404);
@@ -144,15 +146,16 @@ export class Connection {
     } catch (e) { if (e.code === 'IDENTITY_MISMATCH') this.reset(e.code); throw e; }
     finally { this.controlBusy = false; }
   }
-  async login() {
+  async login(publicOrigin = origin(this.env.PUBLIC_BASE_URL)) {
+    if (!publicOrigin) throw new Fault('WRONG_ORIGIN', 403);
     const now = Date.now(), s = this.read();
     if (s.loginAt && now - s.loginAt < 10000) throw new Fault('RATE_LIMITED', 429);
     const state = random(), browser = random(), verifier = random();
     await this.repo.alarm(now + minute);
-    this.patch({ loginAt: now, transaction: this.box({ state, browserHash: this.hash(browser), verifier, until: now + 10 * minute }, 'transaction') });
+    this.patch({ loginAt: now, transaction: this.box({ publicOrigin, state, browserHash: this.hash(browser), verifier, until: now + 10 * minute }, 'transaction') });
     const url = new URL('/oauth/authorize', this.env.PLATFORM_BASE_URL);
     url.search = new URLSearchParams({ response_type: 'code', client_id: this.env.OAUTH_CLIENT_ID,
-      redirect_uri: new URL('/auth/callback', this.env.PUBLIC_BASE_URL).href, scope: 'agent', state,
+      redirect_uri: new URL('/auth/callback', publicOrigin).href, scope: 'agent', state,
       code_challenge: sha256(verifier), code_challenge_method: 'S256' });
     return new Response(null, { status: 303, headers: { Location: url.href, 'Set-Cookie': cookie('transaction', browser, 600) } });
   }
@@ -160,20 +163,20 @@ export class Connection {
     const s = this.read();
     if (!s.transaction) throw new Fault('INVALID_OAUTH_STATE', 400);
     const tx = this.open(s.transaction, 'transaction');
-    if (tx.until < Date.now() || !equal(tx.state, url.searchParams.get('state')) || !equal(tx.browserHash, this.hash(getCookie(req, 'transaction') || ''))) throw new Fault('INVALID_OAUTH_STATE', 400);
+    if ((tx.publicOrigin || origin(this.env.PUBLIC_BASE_URL)) !== url.origin || tx.until < Date.now() || !equal(tx.state, url.searchParams.get('state')) || !equal(tx.browserHash, this.hash(getCookie(req, 'transaction') || ''))) throw new Fault('INVALID_OAUTH_STATE', 400);
     this.patch({ transaction: null }, s.epoch);
     if (url.searchParams.has('error')) throw new Fault('AUTHORIZATION_DENIED', 400);
     const code = url.searchParams.get('code');
     if (!code || code.length > 1024) throw new Fault('INVALID_CODE', 400);
     const token = await this.platform.token({ grant_type: 'authorization_code', code, code_verifier: tx.verifier,
-      redirect_uri: new URL('/auth/callback', this.env.PUBLIC_BASE_URL).href });
+      redirect_uri: new URL('/auth/callback', tx.publicOrigin || this.env.PUBLIC_BASE_URL).href });
     this.guard(s.epoch);
     if (!token.access_token || !token.refresh_token || !token.expires_in) throw new Fault('INVALID_TOKEN_RESPONSE');
     const me = await this.platform.api(token.access_token, '/oauth/me'); this.guard(s.epoch); this.identity(me);
     const session = random();
     this.reset();
     this.patch({ oauth: this.box({ access_token: token.access_token, refresh_token: token.refresh_token, expiresAt: Date.now() + token.expires_in * 1000 }, 'oauth'),
-      sessionHash: this.hash(session), sessionUntil: Date.now() + 7 * 86400000, identityAt: Date.now() });
+      sessionOrigin: url.origin, sessionHash: this.hash(session), sessionUntil: Date.now() + 7 * 86400000, identityAt: Date.now() });
     await this.repo.alarm(Date.now() + minute);
     const headers = new Headers({ Location: '/' });
     headers.append('Set-Cookie', cookie('session', session, 7 * 86400));

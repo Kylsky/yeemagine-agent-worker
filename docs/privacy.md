@@ -2,7 +2,7 @@
 
 ## 持久数据
 
-唯一 ConnectionDO 的 SQLite 表只保存一份连接状态：
+唯一 ConnectionDO 的 SQLite 保存一份连接状态和一个自动生成的实例密钥：
 
 - 加密：平台 access/refresh token、微信 bot token 和 bot ID、收件人 ID 与 context_token、OAuth 临时 state/PKCE verifier/浏览器绑定、扫码轮询 ID。
 - HMAC：微信所有者 ID、消息去重键、浏览器 session、已展示待确认内容摘要。
@@ -24,10 +24,10 @@
 
 ## 安全约束
 
-OAuth 为授权码 + PKCE S256，固定平台 HTTPS origin，回调 state 一次性且绑定 HttpOnly/Secure/SameSite Cookie。修改请求要求同源 Origin、已登录 Cookie 和 CSRF token。平台 owner/client 必须与配置精确匹配。所有 fetch 禁止自动跨域重定向。
+OAuth 为授权码 + PKCE S256，固定平台 HTTPS origin，回调 state 一次性且绑定 HttpOnly/Secure/SameSite Cookie。Worker 回调使用当前请求的 HTTPS origin，不信任 Forwarded 或 X-Forwarded-Host。临时授权事务绑定发起域名，回调与换 token 使用相同地址，浏览器 session 也绑定授权域名。修改请求要求同源 Origin、已登录 Cookie 和 CSRF token。平台 owner/client 必须与配置精确匹配。所有 fetch 禁止自动跨域重定向。
 
 微信 API/CDN URL 仅允许 HTTPS、无用户信息、无额外端口的 weixin.qq.com 及其子域名。此规则信任腾讯控制的该域名空间。平台 token 只发送到配置的平台 origin，微信 token 不发送到 CDN。
 
-媒体使用微信协议要求的 AES-128-ECB/PKCS7；持久凭证使用带目的绑定的 AES-256-GCM，两者不可混淆。加密密钥放在 Worker Secret，具有 Worker 编辑/Secret 权限的管理员仍能读取数据。
+媒体使用微信协议要求的 AES-128-ECB/PKCS7；持久凭证使用带目的绑定的 AES-256-GCM，两者不可混淆。默认密钥首次生成并保存在本实例独立 SQLite 表，与密文同库，无法抵御完整数据库泄露。重启、重新授权和撤销后保留此实例密钥，但删除授权凭证。可选 CREDENTIAL_ENCRYPTION_KEY Secret 将密钥与数据库隔离；添加、更改或移除此高级配置会清空当前连接，需重新授权。具有 Worker 编辑权限的管理员仍能读取运行中的数据。
 
 不执行微信消息中的代码，不开放任意 URL 代理、文件下载或应用配置写入接口。模型工具权限与计费由平台落实。被允许的账号仍可能消耗其自身额度；本 Worker 不替代平台配额限制。

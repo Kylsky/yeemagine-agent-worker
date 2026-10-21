@@ -5,7 +5,7 @@
 <header><span class="mark">Y</span><span>YeeMagine <span class="muted">/ 微信 Agent</span></span><span class="tag">个人部署</span></header>
 <section class="intro"><p class="eyebrow">你的 Agent，现在在微信里。</p><h1>连接一次，<br>随时对话与创作。</h1><p>使用平台账户授权，再扫码连接微信。对话与生图能力、可用模型和积分由你的平台账户提供。</p></section>
 <section class="panel" aria-labelledby="connect-title"><h2 id="connect-title">连接你的账户</h2><p id="message" role="status" aria-live="polite">正在读取连接状态…</p>
-<div id="setup" hidden><p>请在 Cloudflare Worker 的“设置 → 变量和机密”中完成以下配置：</p><ul id="missing"></ul><p>将 Worker 根地址登记到平台的个人授权应用，再填写对应凭证。设置后刷新此页。</p></div>
+<p id="address" class="hint" hidden></p><div id="setup" hidden><p>请在 Cloudflare Worker 的“设置 → 变量和机密”中完成以下配置：</p><ul id="missing"></ul><p>使用上面显示的 Cloudflare 自带地址创建平台个人授权应用，再复制平台地址、Client ID、userId 和 Client Secret。平台地址须可从公网通过 HTTPS 访问，不能填 localhost；userId 不是邮箱。密钥自动生成，无需另配 Worker 域名。</p></div>
 <form action="/auth/login" method="post" id="login" hidden><button type="submit">使用平台账户授权</button><p class="hint">仅允许配置中指定的平台账户登录。无需填写平台密码或 API Key。</p></form>
 <div id="controls" hidden><div class="steps"><span>① 平台已授权</span><span id="wx-status">② 微信待连接</span></div><div class="actions"><button id="qr-button">生成微信二维码</button><button id="disconnect" class="secondary" hidden>断开微信</button><button id="revoke" class="quiet">撤销授权并清除本地数据</button></div>
 <div id="qr-area" hidden><img id="qr" alt="使用微信扫描此二维码"><p id="scan-status">请使用微信扫码</p><form id="verify" hidden><label for="code">微信验证码</label><input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{4,10}" maxlength="10"><button>提交验证码</button></form></div></div>

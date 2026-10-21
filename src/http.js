@@ -10,9 +10,10 @@ export function origin(value) {
 }
 export function config(env) {
   const missing = [];
-  for (const name of ['PLATFORM_BASE_URL', 'PUBLIC_BASE_URL']) if (!origin(env[name])) missing.push(name);
+  if (!origin(env.PLATFORM_BASE_URL)) missing.push('PLATFORM_BASE_URL');
+  if (env.PUBLIC_BASE_URL && !origin(env.PUBLIC_BASE_URL)) missing.push('PUBLIC_BASE_URL');
   for (const name of ['OAUTH_CLIENT_ID', 'PLATFORM_USER_ID', 'OAUTH_CLIENT_SECRET']) if (!env[name]?.trim()) missing.push(name);
-  if (!/^[a-f\d]{64}$/i.test(env.CREDENTIAL_ENCRYPTION_KEY || '')) missing.push('CREDENTIAL_ENCRYPTION_KEY');
+  if (env.CREDENTIAL_ENCRYPTION_KEY && !/^[a-f\d]{64}$/i.test(env.CREDENTIAL_ENCRYPTION_KEY)) missing.push('CREDENTIAL_ENCRYPTION_KEY');
   return missing;
 }
 export async function bytes(response, max = 8 * 1024 * 1024) {

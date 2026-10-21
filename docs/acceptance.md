@@ -2,7 +2,7 @@
 
 ## 已执行的源码验证
 
-`npm test`：21 项通过。覆盖加密/目的隔离、URL 约束、流式上限、媒体 AES、扫码请求头、命令、CSRF、OAuth state/PKCE、刷新并发与保留 refresh token、暂停与撤销、连接代次、消息幂等、报价确认、图片提交重试及回复续传。
+`npm test`：26 项通过。覆盖加密/目的隔离、URL 约束、流式上限、媒体 AES、扫码请求头、命令、CSRF、OAuth state/PKCE、刷新并发与保留 refresh token、暂停与撤销、连接代次、消息幂等、报价确认、图片提交重试及回复续传；新增自动密钥 SQLite 重建持久性、四项配置、动态回调域名、session 域名绑定和未配置页面。
 
 `npm run check`：JavaScript 语法及单 DO、默认日志关闭约束。Wrangler `unstable_readConfig` 已成功读取并校验部署配置。没有编译、发布、部署或真实付费调用。
 

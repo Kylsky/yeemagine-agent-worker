@@ -35,32 +35,32 @@
 
 平台须已部署个人 OAuth 接口。普通 OpenAI 兼容 API 或其他 OAuth 提供方不能直接替代。
 
-### 3. 配置变量和机密
+### 3. 只填写 4 项平台配置
 
 在 Cloudflare「Workers & Pages → 当前 Worker → 设置 → 变量和机密」中填写，保存部署后生效。
 
 | 名称 | 类型 | 内容 |
 |---|---|---|
-| `PLATFORM_BASE_URL` | 文本 | 平台 HTTPS 根地址，不能包含路径、查询参数或用户名 |
-| `PUBLIC_BASE_URL` | 文本 | 当前 Worker HTTPS 根地址，必须与平台登记地址一致 |
+| `PLATFORM_BASE_URL` | 文本 | 公网可访问的平台 HTTPS 根地址，不能填 localhost 或包含路径、查询参数 |
 | `OAUTH_CLIENT_ID` | 文本 | 个人应用 Client ID |
-| `PLATFORM_USER_ID` | 文本 | 应用所有者 userId，作为字符串精确匹配 |
+| `PLATFORM_USER_ID` | 文本 | 复制平台应用显示的 userId，不是邮箱或昵称 |
 | `OAUTH_CLIENT_SECRET` | Secret | 应用 Client Secret |
-| `CREDENTIAL_ENCRYPTION_KEY` | Secret | 独立随机生成的 32 字节密钥，以 64 位十六进制表示 |
 
-在自己的终端生成加密密钥：
+无需填写 Worker 地址或手工生成加密密钥：
 
-```sh
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-```
+- 域名直接使用 Cloudflare 提供的 `https://<名称>.<账户子域>.workers.dev`，不要求自定义域名。Worker 根据当前 HTTPS 请求地址生成回调；平台仍须登记完全一致的地址。
+- 32 字节（256 bit）随机密钥由程序首次需要时生成，保存在本实例 Durable Object，重启及代码更新后复用，不返回浏览器。
+- 首次部署后打开 Worker 页面，可直接看到应登记到平台的应用地址。
 
-请勿把真实值写入 Git、Issue 或日志。不要重复使用 Client Secret 作为加密密钥。`keep_vars` 保留控制台设置的普通变量；Secret 通过 Cloudflare 单独管理。
+原有 `PUBLIC_BASE_URL` 与 `CREDENTIAL_ENCRYPTION_KEY` 仍作为高级可选配置兼容，但不在一键部署表单中出现。前者可锁定唯一 HTTPS origin；后者可提供独立于数据库保存的 64 位十六进制 Secret。默认自动密钥与密文同库存储，不能防御完整数据库泄露；需要密钥与存储隔离时再使用独立 Secret。
+
+请勿把真实值写入 Git、Issue 或日志。`keep_vars` 保留控制台设置的普通变量；Client Secret 通过 Cloudflare 单独管理。
 
 ### 4. 授权并扫码
 
 打开 Worker 页面 → 使用平台账户授权 → 生成微信二维码 → 微信扫码确认。如微信要求验证码，在页面输入。页面关闭后，已连接的 Worker 仍通过 Durable Object alarm 工作。
 
-变更平台地址、Worker 地址、Client ID、userId 或加密密钥会使本地状态清空，需要重新授权、扫码。更新 Client Secret 不清空状态。若浏览器会话过期，重新授权也会建立全新连接。
+变更平台地址、Client ID、userId 或高级密钥/固定地址配置会使本地状态清空，需要重新授权、扫码。更新 Client Secret 不清空状态。改用另一个域名时，须先更新平台登记地址，并在新域名重新授权。若浏览器会话过期，重新授权也会建立全新连接。
 
 本仓库不包含真实平台域名或凭证；部署时使用你自己的平台应用和 Cloudflare 账户。
 

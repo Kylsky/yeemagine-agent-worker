@@ -200,3 +200,61 @@ test('terminal sends at most four segments per pass and retains delivery progres
   await c.deliver(c.read().epoch);assert.equal(sent.length,4);assert.equal(c.read().run.sent,4);
   await c.deliver(c.read().epoch);assert.equal(sent.length,6);assert.equal(c.read().run,null);
 });
+
+test('deployment only requires four platform settings; optional overrides remain validated', () => {
+  const minimal = {...env}; delete minimal.PUBLIC_BASE_URL; delete minimal.CREDENTIAL_ENCRYPTION_KEY;
+  assert.deepEqual(config(minimal), []);
+  assert.deepEqual(config({...minimal,PUBLIC_BASE_URL:'http://bad.example'}), ['PUBLIC_BASE_URL']);
+  assert.deepEqual(config({...minimal,CREDENTIAL_ENCRYPTION_KEY:'bad'}), ['CREDENTIAL_ENCRYPTION_KEY']);
+  assert.ok(config({...minimal,PLATFORM_BASE_URL:'http://localhost:5173'}).includes('PLATFORM_BASE_URL'));
+});
+test('automatic instance key persists in SQLite across recreation, resets and client secret rotation', async () => {
+  const {DatabaseSync} = await import('node:sqlite');
+  const {State} = await import('../src/state.js');
+  const database = new DatabaseSync(':memory:');
+  const storage = {sql:{exec(sql,...args){const stmt=database.prepare(sql);return stmt.columns().length ? stmt.all(...args) : (stmt.run(...args), []);}}};
+  const minimal = {...env}; delete minimal.CREDENTIAL_ENCRYPTION_KEY; delete minimal.PUBLIC_BASE_URL;
+  try {
+    const first = new Connection(new State(storage),minimal); first.initialize();
+    const key = first.key(); assert.match(key,/^[a-f0-9]{64}$/);
+    const cipher = first.box({token:'secret-value'},'oauth'); first.patch({oauth:cipher});
+    const second = new Connection(new State(storage),{...minimal,OAUTH_CLIENT_SECRET:'rotated'}); second.initialize();
+    assert.equal(second.key(),key); assert.deepEqual(second.open(second.read().oauth,'oauth'),{token:'secret-value'});
+    second.reset(); assert.equal(second.read().oauth,undefined); assert.equal(second.key(),key);
+    const third = new Connection(new State(storage),minimal); third.initialize(); assert.equal(third.key(),key);
+  } finally {database.close();}
+});
+test('request origin supplies workers.dev callback; forwarding headers cannot change it', async () => {
+  const repo = new Memory(); repo.encryptionKey = () => '2'.repeat(64);
+  const minimal = {...env}; delete minimal.PUBLIC_BASE_URL; delete minimal.CREDENTIAL_ENCRYPTION_KEY;
+  const c = new Connection(repo,minimal);
+  const root='https://my-agent.account.workers.dev';
+  const response = await c.handle(new Request(root+'/auth/login',{method:'POST',headers:{Origin:root,'X-Forwarded-Host':'evil.example',Forwarded:'host=evil.example'}}));
+  const authUrl = new URL(response.headers.get('Location'));
+  assert.equal(authUrl.searchParams.get('redirect_uri'),root+'/auth/callback');
+  const callback = new URL(root+'/auth/callback?code=code&state='+authUrl.searchParams.get('state'));
+  const headers={Cookie:response.headers.get('set-cookie').split(';')[0]};
+  const foreign = new URL(callback); foreign.hostname='other.example';
+  await assert.rejects(c.callback(new Request(foreign,{headers}),foreign),{code:'INVALID_OAUTH_STATE'});
+  let exchanged;
+  c.platform.token=async fields=>{exchanged=fields;return{access_token:'token',refresh_token:'refresh',expires_in:900};};
+  c.platform.api=async()=>({userId:'123',clientId:'client'});
+  await c.callback(new Request(callback,{headers}),callback);
+  assert.equal(exchanged.redirect_uri,root+'/auth/callback');
+  assert.equal(c.read().sessionOrigin,root);
+});
+test('browser session cannot cross request domains even with a copied cookie', () => {
+  const {c}=fixture();
+  c.patch({sessionHash:c.hash('browser'),sessionUntil:Date.now()+60000,sessionOrigin:'https://original.workers.dev'});
+  const headers={Cookie:'__Host-session=browser'};
+  assert.equal(c.session(new Request('https://original.workers.dev',{headers})),'browser');
+  assert.equal(c.session(new Request('https://other.example',{headers})),null);
+});
+test('unconfigured status shows registration address without key material', async () => {
+  const repo = new Memory(); repo.encryptionKey = () => '2'.repeat(64);
+  const c = new Connection(repo,{});
+  const response=await c.handle(new Request('https://my-agent.account.workers.dev/api/status'));
+  const data=await response.json();assert.equal(data.workerUrl,'https://my-agent.account.workers.dev');
+  assert.deepEqual(data.missing,['PLATFORM_BASE_URL','OAUTH_CLIENT_ID','PLATFORM_USER_ID','OAUTH_CLIENT_SECRET']);
+  assert.ok(!JSON.stringify(data).includes('2'.repeat(64)));
+});

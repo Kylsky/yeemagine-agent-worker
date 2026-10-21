@@ -17,12 +17,10 @@
   "devDependencies": { "wrangler": "4.151.3" },
   "cloudflare": {
     "bindings": {
-      "PLATFORM_BASE_URL": { "description": "YeeMagine 平台 HTTPS 根地址；首次部署可留空，部署后设置" },
-      "PUBLIC_BASE_URL": { "description": "当前 Worker HTTPS 根地址；首次部署后设置" },
+      "PLATFORM_BASE_URL": { "description": "公网可访问的 YeeMagine 平台 HTTPS 根地址，不能填 localhost；首次部署可留空" },
       "OAUTH_CLIENT_ID": { "description": "平台个人授权应用的 Client ID" },
-      "PLATFORM_USER_ID": { "description": "应用所有者的平台 userId，必须精确匹配" },
-      "OAUTH_CLIENT_SECRET": { "description": "平台个人授权应用的 Client Secret" },
-      "CREDENTIAL_ENCRYPTION_KEY": { "description": "独立生成的 64 位十六进制随机密钥，切勿使用 Client Secret" }
+      "PLATFORM_USER_ID": { "description": "复制平台授权应用提供的 userId，不是邮箱或昵称" },
+      "OAUTH_CLIENT_SECRET": { "description": "平台个人授权应用的 Client Secret" }
     }
   }
 }
