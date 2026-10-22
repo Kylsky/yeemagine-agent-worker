@@ -56,10 +56,10 @@ test('a platform outage during the identity check does not stop WeChat polling',
   await c.alarm();
   assert.equal(polls, 1); assert.ok(c.read().oauth); assert.equal(c.read().error, 'PLATFORM_IDENTITY_NETWORK_TIMEOUT');
 });
-test('a message that keeps failing is tried three times, answered, then skipped so later messages flow', async () => {
+test('a read-only command that keeps failing is tried three times, answered, then skipped so later messages flow', async () => {
   const {c, sent} = fixture(); let submits = 0;
-  c.wx.updates = async () => ({ msgs:[message('画一只猫', '1'), message('/status', '2')], get_updates_buf:'next' });
-  c.platform.api = async (_token, path) => { if (path.endsWith('/messages')) { submits++; throw new Fault('server_error', 500); } return {}; };
+  c.wx.updates = async () => ({ msgs:[message('/balance', '1'), message('/status', '2')], get_updates_buf:'next' });
+  c.platform.api = async (_token, path) => { if (path.endsWith('/balance')) { submits++; throw new Fault('server_error', 500); } return {}; };
   for (let i = 0; i < 3; i++) await c.alarm();
   assert.equal(submits, 3);
   assert.ok(sent.some(text => text.includes('没能处理')));

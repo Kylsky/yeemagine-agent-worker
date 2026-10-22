@@ -13,7 +13,7 @@ const NEXT_POLL = 1000, RETRY_DELAY = 2000, BACKOFF_DELAY = 30000, MAX_POLL_FAIL
 const POLL_TIMEOUT = 35000, MESSAGE_ATTEMPTS = 3, DELIVERY_ATTEMPTS = 5;
 // 这些错误重试也不会变好：消息直接回复原因并跳过，结果直接告知用户去平台查看。
 const PERMANENT_STATUS = new Set([400, 402, 403, 404, 409, 410, 413, 415, 422]);
-const PERMANENT_CODES = new Set(['OAUTH_DISABLED', 'BODY_TOO_LARGE', 'UNSUPPORTED_IMAGE', 'INVALID_MEDIA', 'INVALID_MEDIA_KEY']);
+const PERMANENT_CODES = new Set(['BODY_TOO_LARGE', 'UNSUPPORTED_IMAGE', 'INVALID_MEDIA', 'INVALID_MEDIA_KEY']);
 // 这些错误要中止整轮：连接已被重置或断开、微信要求暂停、账户不符。
 const ROUND_STOPPERS = new Set(['CONNECTION_CHANGED', 'WEIXIN_COOLDOWN', 'IDENTITY_MISMATCH']);
 const stopsRound = e => ROUND_STOPPERS.has(e?.code);
@@ -26,7 +26,7 @@ const terminal = new Set(['completed', 'failed', 'cancelled']);
 export class Connection {
   constructor(repo, env, fetcher = fetch) {
     this.repo = repo; this.env = env; this.platform = new Platform(env, fetcher); this.wx = new Weixin(fetcher);
-    this.busy = false; this.controlBusy = false; this.scanBusy = false; this.refreshing = null;
+    this.busy = false; this.controlBusy = false; this.scanBusy = false; this.refreshing = null; this.delivering = null;
   }
   read() { return this.repo.read(); }
   patch(values, epoch) {
@@ -82,12 +82,14 @@ export class Connection {
     } catch (e) {
       this.guard(epoch);
       if (e.status !== 401 || e.code === 'invalid_client') throw e;
-      auth = await this.refresh(epoch);
+      const latest = this.open(this.read().oauth, 'oauth');
+      auth = latest.access_token !== auth.access_token ? latest : await this.refresh(epoch);
       try { const result = await this.platform.api(auth.access_token, path, body, mode); this.guard(epoch); return result; }
       catch (retry) { this.guard(epoch); if (retry.status === 401 && retry.code !== 'invalid_client') this.reset('AUTHORIZATION_EXPIRED'); throw retry; }
     }
   }
   async refresh(epoch) {
+    this.guard(epoch);
     if (this.refreshing?.epoch === epoch) return this.refreshing.promise;
     const promise = (async () => {
       const previous = this.open(this.read().oauth, 'oauth');
@@ -136,7 +138,7 @@ export class Connection {
     // Disconnect remains available even while the platform is suspended or unavailable.
     if (path === '/api/disconnect') {
       const s = this.read();
-      this.patch({ epoch: s.epoch + 1, bot: null, ownerHash: null, route: null, scan: null, cursor: '', seen: [], refs: [], inbound: null, run: null, thread: null, cooldownUntil: null });
+      this.patch({ epoch: s.epoch + 1, bot: null, ownerHash: null, route: null, scan: null, cursor: '', seen: [], refs: [], inbound: null, submission: null, run: null, thread: null, cooldownUntil: null });
       return json({ ok: true });
     }
     if (path === '/api/revoke') return this.revoke();
@@ -321,7 +323,7 @@ export class Connection {
     return result.value;
   }
   // 按顺序处理一批消息。某条消息暂时失败时停在这里、不推进游标，下一轮从它重试；
-  // 同一条最多试 3 次，之后回复原因并跳过，后面的消息照常处理。
+  // 普通命令最多试 3 次；已提交但结果不确定的消息始终保留原幂等键。
   async handleBatch(msgs, epoch) {
     const deadline = Date.now() + 20000;
     for (const msg of msgs) {
@@ -333,7 +335,8 @@ export class Connection {
         const key = this.messageKey(msg);
         if (!key) throw e;
         const attempts = this.bumpAttempt(key, epoch);
-        if (!permanent(e) && attempts < MESSAGE_ATTEMPTS) return { complete: false, problem: safeCode(e), delay: attempts === 1 ? RETRY_DELAY : 10000 };
+        // 提交响应丢失时平台可能已经创建任务，不能提示用户以新消息重建；保留原键继续确认结果。
+        if (this.read().submission?.key === key || (!permanent(e) && attempts < MESSAGE_ATTEMPTS)) return { complete: false, problem: safeCode(e), delay: attempts === 1 ? RETRY_DELAY : 10000 };
         this.mark(key, epoch, { inbound: null });
         await this.sendQuietly(permanent(e) ? failureText(safeCode(e)) : GAVE_UP, epoch, key);
       }
@@ -385,7 +388,7 @@ export class Connection {
     if (!equal(this.hash(msg.from_user_id), this.read().ownerHash)) return rejected('OWNER_MISMATCH');
     if (!msg.message_id || (typeof msg.message_id === 'number' && !Number.isSafeInteger(msg.message_id))) return rejected('INVALID_MESSAGE_ID');
     const key = this.hash('message:' + msg.from_user_id + ':' + msg.message_id);
-    if (this.read().seen.some(x => x.key === key)) return rejected('DUPLICATE');
+    if (this.read().seen.some(x => x.key === key) || this.read().run?.messageKey === key) return rejected('DUPLICATE');
     rejected('ACCEPTED');
     this.patch({ route: this.box({ toUserId: msg.from_user_id, contextToken: msg.context_token }, 'route') }, epoch);
     const items = msg.item_list || [];
@@ -398,7 +401,7 @@ export class Connection {
     let s = this.read();
     if (command.command === 'help') return reply(HELP);
     if (command.command === 'unknown') return reply('没有这个命令，发送 `/help` 查看全部命令。\n想发以斜杠开头的普通文字，请用 `//` 开头。');
-    if (command.command === 'status') return reply(`**微信已连接**\n- 当前任务：${s.run ? '进行中' : '无'}\n- 对话模型：${s.model ? `\`${s.model}\`` : '平台默认'}`);
+    if (command.command === 'status') return reply(`**微信已连接**\n- 当前任务：${s.run ? '进行中' : s.submission ? '提交结果确认中' : '无'}\n- 对话模型：${s.model ? `\`${s.model}\`` : '平台默认'}`);
     if (command.command === 'balance') {
       const data = await this.api('/v1/account/balance', undefined, undefined, epoch);
       return reply(balanceText(data));
@@ -414,10 +417,11 @@ export class Connection {
       return reply('**可用模型**\n' + data.models.map((m, i) => `${i + 1}. ${m.id === s.model ? `**${m.label}**（当前）` : m.label}`).join('\n') + '\n\n发送 `/model 序号` 切换');
     }
     if (command.command === 'cancel' || (!command.command && command.text === '取消' && s.run)) {
-      if (!s.run) return reply('当前没有任务。');
+      if (!s.run) return reply(s.submission ? '上一条消息的提交结果仍在确认，请到平台查看并取消任务。' : '当前没有任务。');
       await this.api(`/v1/agent/runs/${encId(s.run.id)}/cancel`, {}, undefined, epoch);
       return reply('已提交取消，任务停下后会通知你。');
     }
+    if (s.submission && s.submission.key !== key) return reply('上一条消息的提交结果仍在确认，请稍候，避免重复创建任务。');
     if (command.command === 'new') {
       if (s.run) return reply('当前任务还没结束，请等它完成，或发送 /cancel 取消。');
       this.patch({ thread: null, refs: [] }, epoch); return reply('已开始新对话。');
@@ -427,7 +431,9 @@ export class Connection {
       if (run.pendingAction?.type === 'confirmation' && command.text === '确认' && !command.command) {
         const pending = run.pendingAction;
         if (this.hash(JSON.stringify(pending)) !== s.run.noticeHash) {
-          await this.deliverSafely(epoch); return reply('报价有更新，请看最新报价后再回复「确认」。');
+          await this.deliverSafely(epoch);
+          return reply(this.read().run?.noticeDelivery?.uncertain
+            ? '报价未能确认送达，请到平台查看并确认。' : '报价有更新，请看最新报价后再回复「确认」。');
         }
         try {
           await this.api(`/v1/agent/runs/${encId(s.run.id)}/confirmation`, { action: 'confirm', confirmations: pending.confirmations.map(c => ({ confirmationId: c.confirmationId, confirmationHash: c.confirmationHash })) }, undefined, epoch);
@@ -465,7 +471,8 @@ export class Connection {
     }
     const images = items.filter(i => i.type === 2);
     if (images.length > 4) return reply('一次最多发送 4 张参考图。');
-    const refs = await this.references(images, key, epoch, s.refs.filter(r => r.until > Date.now()));
+    const refs = s.submission?.key === key ? s.submission.refs
+      : await this.references(images, key, epoch, s.refs.filter(r => r.until > Date.now()));
     if (refs.length > 4) return reply('最多保留 4 张参考图，请先发送 /new 清空。');
     if (!command.text) {
       if (images.length) { this.mark(key, epoch, { refs, inbound: null }); await this.sendQuietly('收到参考图，请在 30 分钟内发送具体要求。', epoch, key); return; }
@@ -477,13 +484,21 @@ export class Connection {
       this.patch({ thread: thread.threadId }, epoch);
     }
     s = this.read();
-    // Keep references for an uncertain submission; replay uses the same message HMAC.
-    this.patch({ refs }, epoch);
-    const run = await this.api(`/v1/agent/threads/${encId(s.thread)}/messages`, {
-      text: command.text, mode: command.command === 'image' ? 'image' : 'agent', ...(s.model ? { model: s.model } : {}),
-      refs: refs.map(r => ({ type: 'resource', id: r.id })), idempotencyKey: 'wx:' + key
-    }, undefined, epoch);
-    this.mark(key, epoch, { refs: [], inbound: null, run: { id: run.runId, sent: 0, noticeHash: null } });
+    // 只存路由和资源 ID，不存正文；实例恢复、参考图到期或令牌刷新不能改变重放参数。
+    const submission = s.submission || { key, thread: s.thread, model: s.model, refs, mode: command.command === 'image' ? 'image' : 'agent' };
+    this.patch({ refs, submission: { ...submission, uncertain: true } }, epoch);
+    let run;
+    try {
+      run = await this.api(`/v1/agent/threads/${encId(submission.thread)}/messages`, {
+        text: command.text, mode: submission.mode, ...(submission.model ? { model: submission.model } : {}),
+        refs: refs.map(r => ({ type: 'resource', id: r.id })), idempotencyKey: 'wx:' + key
+      }, undefined, epoch);
+    } catch (e) {
+      // 仅首次明确拒绝能证明未创建任务；后续权限变化或损坏的响应不能否定此前已接受的提交。
+      if (!submission.uncertain && permanent(e) && !['INVALID_JSON', 'BODY_TOO_LARGE'].includes(e.code)) this.patch({ submission: null }, epoch);
+      throw e;
+    }
+    this.mark(key, epoch, { refs: [], inbound: null, submission: null, run: { id: run.runId, messageKey: key, sent: 0, noticeHash: null } });
     await this.sendQuietly('收到，正在处理…', epoch, key);
   }
   async references(images, key, epoch, existing) {
@@ -500,12 +515,23 @@ export class Connection {
     }
     return staged.refs;
   }
-  // 回传结果出错只影响这个任务：临时错误按退避稍后再试，重试多次或明显无法恢复时告诉用户去平台查看并释放任务。
+  // 任务查询的暂时故障保留原 Run；已确认终态后的微信发送失败仍沿用有界重试。
   // 返回本轮的问题代码供页面展示；只有中止整轮的错误才会抛出。
   async deliverSafely(epoch) {
+    if (this.delivering?.epoch === epoch) return this.delivering.promise;
+    const promise = this.deliverAttempt(epoch);
+    this.delivering = { epoch, promise };
+    try { return await promise; } finally { if (this.delivering?.promise === promise) this.delivering = null; }
+  }
+  async deliverAttempt(epoch) {
     const s = this.read();
     if (!s.run || !s.route || s.run.retryAt > Date.now()) return null;
-    try { await this.deliver(epoch); return null; }
+    let polling = true;
+    try {
+      const snapshot = await this.api(`/v1/agent/runs/${encId(s.run.id)}`, undefined, undefined, epoch);
+      polling = false;
+      await this.deliver(epoch, snapshot); return null;
+    }
     catch (e) {
       this.guard(epoch);
       if (stopsRound(e)) throw e;
@@ -514,7 +540,8 @@ export class Connection {
       this.patch({ diagnostics: { ...this.read().diagnostics, deliveryError: code, deliveryErrorAt: Date.now() } }, epoch);
       if (!run) return null;
       const failures = (run.failures || 0) + 1;
-      if (!permanent(e) && failures < DELIVERY_ATTEMPTS) {
+      if (['OAUTH_DISABLED', 'invalid_client'].includes(code) || (polling && ['INVALID_JSON', 'BODY_TOO_LARGE'].includes(code))
+        || (!permanent(e) && (polling || failures < DELIVERY_ATTEMPTS))) {
         this.patch({ run: { ...run, failures, retryAt: Date.now() + Math.min(30000, RETRY_DELAY * 2 ** (failures - 1)) } }, epoch);
         return code;
       }
@@ -523,42 +550,84 @@ export class Connection {
       return null;
     }
   }
-  async deliver(epoch) {
+  // 微信没有已确认的 exactly-once 契约。先保存发送标记；若回执丢失或实例中断，不自动重发不确定的段落。
+  async sendRunItem(loadItem, epoch, id, progress) {
+    let s = this.read(); this.guard(epoch);
+    if (s.run.sending === id) {
+      this.patch({ run: { ...s.run, ...progress, sending: null,
+        ...(progress.noticeDelivery ? { noticeDelivery: { ...progress.noticeDelivery, uncertain: true } } : { deliveryUncertain: true }) } }, epoch);
+      return;
+    }
+    const item = await loadItem(); this.guard(epoch);
+    s = this.read();
+    this.patch({ run: { ...s.run, sending: id } }, epoch);
+    try {
+      await this.wx.send(this.open(s.bot, 'bot'), this.open(s.route, 'route'), item, id); this.guard(epoch);
+    } catch (e) {
+      this.guard(epoch);
+      // 明确拒绝未被接收，可按既有规则重试；网络中断和未知响应保留 sending 标记。
+      if (e.code === 'WEIXIN_COOLDOWN' || /^WEIXIN_API_ERROR/.test(e.code) || /^WEIXIN_HTTP_4\d\d$/.test(e.code)) {
+        this.patch({ run: { ...this.read().run, sending: null } }, epoch);
+      }
+      throw e;
+    }
+    this.patch({ run: { ...this.read().run, ...progress, sending: null, failures: 0, retryAt: 0 } }, epoch);
+  }
+  async deliver(epoch, snapshot) {
     const s = this.read();
     if (!s.run) return;
-    const run = await this.api(`/v1/agent/runs/${encId(s.run.id)}`, undefined, undefined, epoch);
+    const run = snapshot || await this.api(`/v1/agent/runs/${encId(s.run.id)}`, undefined, undefined, epoch);
     const pending = run.pendingAction;
     if (pending?.type === 'confirmation' || pending?.type === 'input') {
       const hash = this.hash(JSON.stringify(pending));
       if (s.run.noticeHash !== hash) {
-        await this.send(pending.type === 'confirmation' ? confirmationText(pending) : inputText(pending), epoch, this.hash(s.run.id + hash));
-        this.patch({ run: { ...s.run, noticeHash: hash, failures: 0, retryAt: 0 } }, epoch);
+        const parts = chunks(pending.type === 'confirmation' ? confirmationText(pending) : inputText(pending));
+        let delivery = s.run.noticeDelivery?.hash === hash ? s.run.noticeDelivery : { hash, sent: 0 };
+        for (let i = delivery.sent; i < parts.length; i++) {
+          await this.sendRunItem(async () => ({ type: 1, text_item: { text: parts[i] } }), epoch,
+            `ym_${this.hash(s.run.id + hash)}_${i}`, { noticeDelivery: { ...delivery, sent: i + 1 } });
+          delivery = this.read().run.noticeDelivery;
+        }
+        if (delivery.uncertain && !delivery.warned) await this.sendRunItem(async () => ({ type: 1,
+          text_item: { text: '有一段提示未能确认送达，请到平台查看并操作，当前任务会保留。' } }), epoch,
+        'ym_' + this.hash(s.run.id + hash + ':uncertain'), { noticeDelivery: { ...delivery, warned: true } });
+        if (!delivery.uncertain) this.patch({ run: { ...this.read().run, noticeHash: hash, failures: 0, retryAt: 0 } }, epoch);
       }
       return;
     }
-    if (!terminal.has(run.status)) return;
+    if (!terminal.has(run.status)) {
+      this.patch({ run: { ...this.read().run, failures: 0, retryAt: 0 } }, epoch);
+      return;
+    }
     // 平台回答本身是 Markdown，先按微信支持的写法清理，再按段落分段，避免把代码块或列表从中间切断。
-    const parts = chunks(toWeixinMarkdown(run.finalText) || (run.status === 'cancelled' ? '任务已取消。' : run.status === 'failed' ? '任务失败，请在平台查看详情。' : '任务完成。'));
+    const text = toWeixinMarkdown(run.finalText);
+    // 独立提示不改变原有正文/图片序号，升级时正在续发的旧任务也不会错位或重复。
+    if (run.partial === true && !s.run.partialNotified) await this.sendRunItem(async () => ({ type: 1, text_item: {
+      text: `**任务部分完成**\n${run.stopReason === 'context_limit' ? '压缩后仍超出模型上下文窗口，本次执行已停止。' : '本次执行未完成全部工作，请到平台查看详情。'}`,
+    } }), epoch, 'ym_' + this.hash(s.run.id + ':partial'), { partialNotified: true });
+    const parts = chunks(text || (run.partial === true ? '' : run.status === 'cancelled' ? '任务已取消。' : run.status === 'failed' ? '任务失败，请在平台查看详情。' : '任务完成。'));
     const artifacts = run.artifacts || [];
     const bot = this.open(s.bot, 'bot'), route = this.open(s.route, 'route');
     for (let i = s.run.sent; i < Math.min(parts.length + artifacts.length, s.run.sent + 4); i++) {
       this.guard(epoch);
-      let item;
-      if (i < parts.length) item = { type: 1, text_item: { text: parts[i] } };
-      else {
+      await this.sendRunItem(async () => {
+        if (i < parts.length) return { type: 1, text_item: { text: parts[i] } };
         try {
           const data = await this.api(`/v1/agent/resources/${encId(artifacts[i - parts.length].resourceId)}/content`, undefined, 'bytes', epoch);
-          item = await this.wx.upload(bot, route, data); this.guard(epoch);
+          const item = await this.wx.upload(bot, route, data); this.guard(epoch); return item;
         } catch (e) {
           // 单张图片过大、格式不支持或已被删除时换成一句说明，其余内容照常送达。
           if (!permanent(e)) throw e;
           this.patch({ diagnostics: { ...this.read().diagnostics, deliveryError: safeCode(e), deliveryErrorAt: Date.now() } }, epoch);
-          item = { type: 1, text_item: { text: imageUnsendable(safeCode(e)) } };
+          return { type: 1, text_item: { text: imageUnsendable(safeCode(e)) } };
         }
-      }
-      await this.wx.send(bot, route, item, 'ym_' + this.hash(s.run.id + ':' + i)); this.guard(epoch);
-      this.patch({ run: { ...s.run, sent: i + 1, failures: 0, retryAt: 0 } }, epoch);
+      }, epoch, 'ym_' + this.hash(s.run.id + ':' + i), { sent: i + 1 });
     }
-    if (this.read().run.sent >= parts.length + artifacts.length) this.patch({ run: null }, epoch);
+    if (this.read().run.sent >= parts.length + artifacts.length) {
+      if (this.read().run.deliveryUncertain && !this.read().run.uncertaintyNotified) await this.sendRunItem(async () => ({ type: 1,
+        text_item: { text: '部分回复未能确认送达，请到平台查看完整结果。任务不会重新执行。' } }), epoch,
+      'ym_' + this.hash(s.run.id + ':uncertain'), { uncertaintyNotified: true });
+      this.patch({ run: null }, epoch);
+    }
   }
 }
